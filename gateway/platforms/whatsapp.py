@@ -21,6 +21,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import subprocess
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -299,9 +300,13 @@ class WhatsAppAdapter(BasePlatformAdapter):
         bridge_dir = bridge_path.parent
         if not (bridge_dir / "node_modules").exists():
             print(f"[{self.name}] Installing WhatsApp bridge dependencies...")
+            npm_exe = shutil.which("npm") or shutil.which("npm.cmd")
+            if not npm_exe:
+                print(f"[{self.name}] npm executable not found on PATH")
+                return False
             try:
                 install_result = subprocess.run(
-                    ["npm", "install", "--silent"],
+                    [npm_exe, "install", "--silent"],
                     cwd=str(bridge_dir),
                     capture_output=True,
                     text=True,

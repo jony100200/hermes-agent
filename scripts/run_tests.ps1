@@ -28,7 +28,7 @@ foreach ($candidate in $candidates) {
 }
 
 if (-not $python) {
-    throw "No virtual environment python found. Expected one of: $($candidates -join ', ')"
+    throw "No virtual environment python found. Run: pwsh -NoProfile -File .\scripts\setup.ps1 -SkipSetupWizard"
 }
 
 Set-Location $repoRoot

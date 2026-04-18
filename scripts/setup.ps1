@@ -26,7 +26,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
-$venvDir = Join-Path $repoRoot "venv"
+$venvDir = Join-Path $repoRoot ".venv"
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 
 Write-Info "Repository root: $repoRoot"

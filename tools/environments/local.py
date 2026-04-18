@@ -145,8 +145,8 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
 
 
 def _find_bash() -> str:
-    """Find a shell for command execution (legacy name for compatibility)."""
-    return find_preferred_shell()
+    """Find bash for command execution (required by BaseEnvironment semantics)."""
+    return _find_legacy_bash()
 
 
 def _find_shell() -> str:
@@ -169,10 +169,6 @@ def _find_legacy_bash() -> str:
     if custom and os.path.isfile(custom):
         return custom
 
-    found = shutil.which("bash")
-    if found:
-        return found
-
     for candidate in (
         os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "bin", "bash.exe"),
         os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git", "bin", "bash.exe"),
@@ -181,11 +177,32 @@ def _find_legacy_bash() -> str:
         if candidate and os.path.isfile(candidate):
             return candidate
 
+    found = shutil.which("bash")
+    if found:
+        return found
+
     raise RuntimeError(
         "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
         "Install it from: https://git-scm.com/download/win\n"
         "Or set HERMES_GIT_BASH_PATH to your bash.exe location."
     )
+
+
+def _windows_to_bash_path(path: str, bash_path: str | None = None) -> str:
+    """Convert a Windows absolute path to a bash-compatible path."""
+    if not _IS_WINDOWS:
+        return path
+    if not path or len(path) < 3 or path[1] != ":":
+        return path
+
+    drive = path[0].lower()
+    rest = path[2:].replace("\\", "/").lstrip("/")
+    bash_path = (bash_path or "").lower()
+
+    # WSL bash.exe expects /mnt/<drive>/...; Git Bash expects /<drive>/...
+    if "windows\\system32\\bash.exe" in bash_path:
+        return f"/mnt/{drive}/{rest}"
+    return f"/{drive}/{rest}"
 
 
 # Standard PATH entries for environments with minimal PATH.
@@ -249,13 +266,15 @@ class LocalEnvironment(BaseEnvironment):
         override the temp root explicitly (for example via terminal.env or a
         custom TMPDIR), then fall back to the host process environment.
         """
+        if _IS_WINDOWS:
+            # LocalEnvironment executes through bash semantics; keep session
+            # artifact paths in bash-compatible form.
+            return "/tmp"
+
         for env_var in ("TMPDIR", "TMP", "TEMP"):
             candidate = self.env.get(env_var) or os.environ.get(env_var)
             if candidate and os.path.isabs(candidate):
                 return candidate.rstrip("/\\") or candidate
-
-        if _IS_WINDOWS:
-            return default_temp_dir()
 
         if os.path.isdir("/tmp") and os.access("/tmp", os.W_OK | os.X_OK):
             return "/tmp"
@@ -327,3 +346,7 @@ class LocalEnvironment(BaseEnvironment):
                 os.unlink(f)
             except OSError:
                 pass
+
+    def normalize_path_for_shell(self, path: str) -> str:
+        """Normalize host paths for the configured bash runtime on Windows."""
+        return _windows_to_bash_path(path, _find_bash())

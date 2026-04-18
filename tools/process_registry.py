@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shlex
 import signal
 import subprocess
@@ -251,6 +252,18 @@ class ProcessRegistry:
         })
 
     @staticmethod
+    def _normalize_command_for_shell(command: str, shell_path: str) -> str:
+        """Adjust common Unix command names when running under native Windows shells."""
+        if not _IS_WINDOWS:
+            return command
+        shell_name = os.path.basename(shell_path).lower()
+        if shell_name not in {"pwsh", "pwsh.exe", "powershell", "powershell.exe", "cmd", "cmd.exe"}:
+            return command
+        if re.match(r"^\s*python3(\s|$)", command):
+            return re.sub(r"^\s*python3(?=\s|$)", "python", command, count=1)
+        return command
+
+    @staticmethod
     def _is_host_pid_alive(pid: Optional[int]) -> bool:
         """Best-effort liveness check for host-visible PIDs."""
         if not pid:
@@ -260,6 +273,22 @@ class ProcessRegistry:
             return True
         except (ProcessLookupError, PermissionError):
             return False
+        except OSError:
+            if not _IS_WINDOWS:
+                return False
+            # Windows can return WinError 87 for PIDs where os.kill(..., 0)
+            # is unsupported; fall back to tasklist-based detection.
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                output = (result.stdout or "").strip().lower()
+                return bool(output and "no tasks are running" not in output and "info:" not in output)
+            except Exception:
+                return False
 
     def _refresh_detached_session(self, session: Optional[ProcessSession]) -> Optional[ProcessSession]:
         """Update recovered host-PID sessions when the underlying process has exited."""
@@ -283,7 +312,10 @@ class ProcessRegistry:
     @staticmethod
     def _terminate_host_pid(pid: int) -> None:
         """Terminate a host-visible PID without requiring the original process handle."""
-        terminate_pid_tree(pid, force=False)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            terminate_pid_tree(pid, force=False)
 
     # ----- Spawn -----
 
@@ -338,7 +370,8 @@ class ProcessRegistry:
                 user_shell = _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
-                pty_argv = build_shell_command(user_shell, command, interactive=True)
+                normalized_command = self._normalize_command_for_shell(command, user_shell)
+                pty_argv = build_shell_command(user_shell, normalized_command, interactive=True)
                 pty_proc = _PtyProcessCls.spawn(
                     pty_argv,
                     cwd=session.cwd,
@@ -380,7 +413,8 @@ class ProcessRegistry:
         # stdout is a pipe, hiding output from process(action="poll")).
         bg_env = _sanitize_subprocess_env(os.environ, env_vars)
         bg_env["PYTHONUNBUFFERED"] = "1"
-        shell_argv = build_shell_command(user_shell, command, interactive=True)
+        normalized_command = self._normalize_command_for_shell(command, user_shell)
+        shell_argv = build_shell_command(user_shell, normalized_command, interactive=True)
         proc = subprocess.Popen(
             shell_argv,
             text=True,

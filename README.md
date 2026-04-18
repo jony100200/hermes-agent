@@ -53,6 +53,16 @@ source ~/.bashrc    # reload shell (or: source ~/.zshrc)
 hermes              # start chatting!
 ```
 
+On Windows (PowerShell 7+):
+
+```powershell
+hermes
+pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\tools\test_windows_compat.py
+```
+
+Known Windows limitation:
+- Local terminal execution uses bash semantics for command snapshots; install Git for Windows (Git Bash) for full local terminal tool compatibility.
+
 ---
 
 ## Getting Started
@@ -163,7 +173,7 @@ Windows contributor flow (PowerShell 7+):
 git clone https://github.com/NousResearch/hermes-agent.git
 cd hermes-agent
 pwsh -NoProfile -File .\scripts\setup.ps1 -SkipSetupWizard
-.\venv\Scripts\python.exe -m hermes_cli.main setup
+.\.venv\Scripts\python.exe -m hermes_cli.main setup
 ```
 
 Manual path (equivalent to the above):

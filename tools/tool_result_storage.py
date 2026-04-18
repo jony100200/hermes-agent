@@ -25,6 +25,7 @@ Defense against context-window overflow operates at three levels:
 import logging
 import os
 import shlex
+import tempfile
 import uuid
 
 from tools.budget_config import (
@@ -36,7 +37,7 @@ from tools.budget_config import (
 logger = logging.getLogger(__name__)
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
-STORAGE_DIR = "/tmp/hermes-results"
+STORAGE_DIR = os.path.join(tempfile.gettempdir(), "hermes-results")
 HEREDOC_MARKER = "HERMES_PERSIST_EOF"
 _BUDGET_TOOL_NAME = "__budget_enforcement__"
 
@@ -52,8 +53,8 @@ def _resolve_storage_dir(env) -> str:
                 logger.debug("Could not resolve env temp dir: %s", exc)
             else:
                 if temp_dir:
-                    temp_dir = temp_dir.rstrip("/") or "/"
-                    return f"{temp_dir}/hermes-results"
+                    temp_dir = temp_dir.rstrip("/\\") or temp_dir
+                    return os.path.join(temp_dir, "hermes-results")
     return STORAGE_DIR
 
 

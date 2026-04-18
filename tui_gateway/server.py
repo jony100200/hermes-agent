@@ -13,6 +13,7 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 from hermes_cli.env_loader import load_hermes_dotenv
+from tools.platform_runtime import build_shell_command, find_preferred_shell
 
 _hermes_home = get_hermes_home()
 load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).parent.parent / ".env")
@@ -2085,6 +2086,20 @@ def _resolve_name(name: str) -> str:
         return name
 
 
+def _run_shell_command(command: str, *, timeout: int = 30, cwd: str | None = None) -> subprocess.CompletedProcess:
+    """Run a command string through the preferred shell in a cross-platform way."""
+    shell = find_preferred_shell()
+    argv = build_shell_command(shell, command)
+    return subprocess.run(
+        argv,
+        shell=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+    )
+
+
 @method("command.dispatch")
 def _(rid, params: dict) -> dict:
     name, arg = params.get("name", "").lstrip("/"), params.get("arg", "")
@@ -2097,7 +2112,7 @@ def _(rid, params: dict) -> dict:
     if name in qcmds:
         qc = qcmds[name]
         if qc.get("type") == "exec":
-            r = subprocess.run(qc.get("command", ""), shell=True, capture_output=True, text=True, timeout=30)
+            r = _run_shell_command(qc.get("command", ""), timeout=30, cwd=os.getcwd())
             output = ((r.stdout or "") + ("\n" if r.stdout and r.stderr else "") + (r.stderr or "")).strip()[:4000]
             if r.returncode != 0:
                 return _err(rid, 4018, output or f"quick command failed with exit code {r.returncode}")
@@ -2891,7 +2906,7 @@ def _(rid, params: dict) -> dict:
     except ImportError:
         pass
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=os.getcwd())
+        r = _run_shell_command(cmd, timeout=30, cwd=os.getcwd())
         return _ok(rid, {"stdout": r.stdout[-4000:], "stderr": r.stderr[-2000:], "code": r.returncode})
     except subprocess.TimeoutExpired:
         return _err(rid, 5002, "command timed out (30s)")

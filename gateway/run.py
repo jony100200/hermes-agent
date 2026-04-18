@@ -1715,7 +1715,6 @@ class GatewayRunner:
             pass
 
     async def _launch_detached_restart_command(self) -> None:
-        import shutil
         import subprocess
 
         hermes_cmd = _resolve_hermes_bin()
@@ -1724,26 +1723,38 @@ class GatewayRunner:
             return
 
         current_pid = os.getpid()
-        cmd = " ".join(shlex.quote(part) for part in hermes_cmd)
-        shell_cmd = (
-            f"while kill -0 {current_pid} 2>/dev/null; do sleep 0.2; done; "
-            f"{cmd} gateway restart"
+        restart_cmd = list(hermes_cmd) + ["gateway", "restart"]
+        launcher_script = (
+            "import json, os, subprocess, sys, time;"
+            "pid=int(sys.argv[1]);"
+            "cmd=json.loads(sys.argv[2]);"
+            "while True:\n"
+            "    try:\n"
+            "        os.kill(pid, 0)\n"
+            "    except ProcessLookupError:\n"
+            "        break\n"
+            "    except PermissionError:\n"
+            "        pass\n"
+            "    time.sleep(0.2)\n"
+            "subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)"
         )
-        setsid_bin = shutil.which("setsid")
-        if setsid_bin:
-            subprocess.Popen(
-                [setsid_bin, "bash", "-lc", shell_cmd],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        else:
-            subprocess.Popen(
-                ["bash", "-lc", shell_cmd],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+        launcher_argv = [
+            sys.executable,
+            "-c",
+            launcher_script,
+            str(current_pid),
+            json.dumps(restart_cmd),
+        ]
+
+        popen_kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "start_new_session": True,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
+        subprocess.Popen(launcher_argv, **popen_kwargs)
 
     def request_restart(self, *, detached: bool = False, via_service: bool = False) -> bool:
         if self._restart_task_started:

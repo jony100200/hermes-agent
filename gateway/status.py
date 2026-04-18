@@ -15,11 +15,11 @@ import hashlib
 import json
 import os
 import signal
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from hermes_constants import get_hermes_home
+from tools.platform_runtime import terminate_pid_tree
 from typing import Any, Optional
 
 _GATEWAY_KIND = "hermes-gateway"
@@ -59,21 +59,8 @@ def terminate_pid(pid: int, *, force: bool = False) -> None:
     POSIX uses SIGTERM/SIGKILL. Windows uses taskkill /T /F for true force-kill
     because os.kill(..., SIGTERM) is not equivalent to a tree-killing hard stop.
     """
-    if force and _IS_WINDOWS:
-        try:
-            result = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except FileNotFoundError:
-            os.kill(pid, signal.SIGTERM)
-            return
-
-        if result.returncode != 0:
-            details = (result.stderr or result.stdout or "").strip()
-            raise OSError(details or f"taskkill failed for PID {pid}")
+    if _IS_WINDOWS:
+        terminate_pid_tree(pid, force=force)
         return
 
     sig = signal.SIGTERM if not force else getattr(signal, "SIGKILL", signal.SIGTERM)

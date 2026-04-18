@@ -444,6 +444,23 @@ class ShellFileOperations(FileOperations):
         """
         if not path:
             return path
+
+        normalize = getattr(self.env, "normalize_path_for_shell", None)
+        if callable(normalize):
+            try:
+                normalized = normalize(path)
+                if isinstance(normalized, str) and normalized:
+                    path = normalized
+            except Exception:
+                pass
+
+        # Git Bash path translation for Windows absolute drive paths.
+        # Shell file operations run through bash semantics, where
+        # `C:\foo\bar` must be addressed as `/c/foo/bar`.
+        if os.name == "nt" and re.match(r"^[A-Za-z]:[\\/]", path):
+            drive = path[0].lower()
+            rest = path[2:].replace("\\", "/")
+            return f"/{drive}/{rest.lstrip('/')}"
         
         # Handle ~ and ~user
         if path.startswith('~'):

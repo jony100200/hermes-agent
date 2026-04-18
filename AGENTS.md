@@ -524,17 +524,28 @@ def profile_env(tmp_path, monkeypatch):
 
 ## Testing
 
-**ALWAYS use `scripts/run_tests.sh`** — do not call `pytest` directly. The script enforces
-hermetic environment parity with CI (unset credential vars, TZ=UTC, LANG=C.UTF-8,
-4 xdist workers matching GHA ubuntu-latest). Direct `pytest` on a 16+ core
-developer machine with API keys set diverges from CI in ways that have caused
-multiple "works locally, fails in CI" incidents (and the reverse).
+**ALWAYS use the platform test wrapper** — do not call `pytest` directly.
+
+- Linux/macOS/WSL: `scripts/run_tests.sh`
+- Windows PowerShell: `scripts/run_tests.ps1`
+
+These wrappers enforce hermetic environment parity with CI (unset credential vars,
+TZ=UTC, LANG=C.UTF-8, 4 xdist workers matching GHA ubuntu-latest). Direct
+`pytest` on a 16+ core developer machine with API keys set diverges from CI in
+ways that have caused multiple "works locally, fails in CI" incidents (and the reverse).
 
 ```bash
 scripts/run_tests.sh                                  # full suite, CI-parity
 scripts/run_tests.sh tests/gateway/                   # one directory
 scripts/run_tests.sh tests/agent/test_foo.py::test_x  # one test
 scripts/run_tests.sh -v --tb=long                     # pass-through pytest flags
+```
+
+```powershell
+pwsh -NoProfile -File scripts/run_tests.ps1
+pwsh -NoProfile -File scripts/run_tests.ps1 tests/gateway/
+pwsh -NoProfile -File scripts/run_tests.ps1 tests/agent/test_foo.py::test_x
+pwsh -NoProfile -File scripts/run_tests.ps1 -v --tb=long
 ```
 
 ### Why the wrapper (and why the old "just call pytest" doesn't work)
@@ -555,8 +566,8 @@ is belt-and-suspenders.
 
 ### Running without the wrapper (only if you must)
 
-If you can't use the wrapper (e.g. on Windows or inside an IDE that shells
-pytest directly), at minimum activate the venv and pass `-n 4`:
+If you can't use the wrapper (e.g. inside an IDE that shells pytest directly),
+at minimum activate the venv and pass `-n 4`:
 
 ```bash
 source venv/bin/activate
