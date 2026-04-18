@@ -510,7 +510,12 @@ from tools.managed_tool_gateway import is_managed_tool_gateway_ready
 
 
 # Tool description for LLM
-TERMINAL_TOOL_DESCRIPTION = """Execute shell commands on a Linux environment. Filesystem usually persists between calls.
+TERMINAL_TOOL_DESCRIPTION = """Execute shell commands in the active terminal backend. Filesystem usually persists between calls.
+
+Shell semantics depend on backend:
+- local on Windows defaults to PowerShell-native execution
+- local on Unix uses bash-compatible execution
+- container/remote backends use Linux shell semantics inside the sandbox
 
 Do NOT use cat/head/tail to read files — use read_file instead.
 Do NOT use grep/rg/find to search — use search_files instead.
@@ -602,6 +607,10 @@ def _get_env_config() -> Dict[str, Any]:
     env_type = os.getenv("TERMINAL_ENV", "local")
     
     mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in ("true", "1", "yes")
+    local_shell_mode = os.getenv(
+        "TERMINAL_LOCAL_SHELL_MODE",
+        "native" if os.name == "nt" else "bash_compat",
+    ).strip().lower()
 
     # Default cwd: local uses the host's current directory, everything
     # else starts in the user's home (~ resolves to whatever account
@@ -619,19 +628,31 @@ def _get_env_config() -> Dict[str, Any]:
     # normal sandbox behavior and discard host paths.
     cwd = os.getenv("TERMINAL_CWD", default_cwd)
     host_cwd = None
-    host_prefixes = ("/Users/", "/home/", "C:\\", "C:/")
+    legacy_windows_prefixes = ("C:\\", "C:/")
+
+    def _looks_like_host_path(raw: str) -> bool:
+        if not raw:
+            return False
+        if raw.startswith(("/Users/", "/home/")):
+            return True
+        if raw.startswith(legacy_windows_prefixes):
+            return True
+        return bool(re.match(r"^[A-Za-z]:[\\/]", raw))
     if env_type == "docker" and mount_docker_cwd:
         docker_cwd_source = os.getenv("TERMINAL_CWD") or os.getcwd()
-        candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
+        if _looks_like_host_path(docker_cwd_source):
+            candidate = docker_cwd_source
+        else:
+            candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
         if (
-            any(candidate.startswith(p) for p in host_prefixes)
+            _looks_like_host_path(candidate)
             or (os.path.isabs(candidate) and os.path.isdir(candidate) and not candidate.startswith(("/workspace", "/root")))
         ):
             host_cwd = candidate
             cwd = "/workspace"
     elif env_type in ("modal", "docker", "singularity", "daytona") and cwd:
         # Host paths and relative paths that won't work inside containers
-        is_host_path = any(cwd.startswith(p) for p in host_prefixes)
+        is_host_path = _looks_like_host_path(cwd)
         is_relative = not os.path.isabs(cwd)  # e.g. "." or "src/"
         if (is_host_path or is_relative) and cwd != default_cwd:
             logger.info("Ignoring TERMINAL_CWD=%r for %s backend "
@@ -665,6 +686,7 @@ def _get_env_config() -> Dict[str, Any]:
             os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
         ).lower() in ("true", "1", "yes"),
         "local_persistent": os.getenv("TERMINAL_LOCAL_PERSISTENT", "false").lower() in ("true", "1", "yes"),
+        "local_shell_mode": local_shell_mode,
         # Container resource config (applies to docker, singularity, modal, daytona -- ignored for local/ssh)
         "container_cpu": _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number"),
         "container_memory": _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120"),     # MB (default 5GB)
@@ -714,7 +736,12 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
     docker_env = cc.get("docker_env", {})
 
     if env_type == "local":
-        return _LocalEnvironment(cwd=cwd, timeout=timeout)
+        lc = local_config or {}
+        return _LocalEnvironment(
+            cwd=cwd,
+            timeout=timeout,
+            shell_mode=lc.get("shell_mode"),
+        )
     
     elif env_type == "docker":
         return _DockerEnvironment(
@@ -1256,6 +1283,7 @@ def terminal_tool(
                         if env_type == "local":
                             local_config = {
                                 "persistent": config.get("local_persistent", False),
+                                "shell_mode": config.get("local_shell_mode"),
                             }
 
                         new_env = _create_environment(
@@ -1363,6 +1391,7 @@ def terminal_tool(
                         session_key=session_key,
                         env_vars=env.env if hasattr(env, 'env') else None,
                         use_pty=effective_pty,
+                        shell_mode=getattr(env, "_shell_mode", None),
                     )
                 else:
                     proc_session = process_registry.spawn_via_env(

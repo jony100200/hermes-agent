@@ -101,6 +101,13 @@ class TestCwdHandling:
         config = _tt_mod._get_env_config()
         assert config["cwd"] == "/root"
 
+    def test_non_c_windows_path_replaced_for_modal(self, monkeypatch):
+        """TERMINAL_CWD on any Windows drive letter should be replaced for modal."""
+        monkeypatch.setenv("TERMINAL_ENV", "modal")
+        monkeypatch.setenv("TERMINAL_CWD", "D:\\work\\repo")
+        config = _tt_mod._get_env_config()
+        assert config["cwd"] == "/root"
+
     @pytest.mark.parametrize("backend", ["modal", "docker", "singularity", "daytona"])
     def test_default_cwd_is_root_for_container_backends(self, backend, monkeypatch):
         """Container backends should default to /root, not ~."""

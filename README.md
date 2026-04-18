@@ -35,33 +35,39 @@ curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scri
 
 Works on Linux, macOS, WSL2, and Android via Termux. The installer handles the platform-specific setup for you.
 
-> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
->
-> **Windows (PowerShell 7+):**
-> ```powershell
-> irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex
-> ```
-> If you already cloned this repo, use:
-> ```powershell
-> pwsh -NoProfile -File .\scripts\setup.ps1
-> ```
-
-After installation:
+After installation (Linux/macOS/WSL/Termux):
 
 ```bash
 source ~/.bashrc    # reload shell (or: source ~/.zshrc)
 hermes              # start chatting!
 ```
 
-On Windows (PowerShell 7+):
+> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+
+Windows (PowerShell 7+):
 
 ```powershell
+irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex
+```
+
+If you already cloned this repo, use:
+
+```powershell
+pwsh -NoProfile -File .\scripts\setup.ps1
+```
+
+After installation (Windows PowerShell 7+):
+
+```powershell
+# Start a new PowerShell session after install, then:
 hermes
 pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\tools\test_windows_compat.py
 ```
 
-Known Windows limitation:
-- Local terminal execution uses bash semantics for command snapshots; install Git for Windows (Git Bash) for full local terminal tool compatibility.
+Known Windows limitations (current):
+- The local `terminal` tool is PowerShell-native by default.
+- The local file tools (`read_file`, `write_file`, `search_files`, `patch`) still run through a bash-compat layer and require Git for Windows (Git Bash).
+- Some optional dev scripts in this repo remain bash-first.
 
 ---
 
@@ -167,6 +173,16 @@ cd hermes-agent
 ./hermes              # auto-detects the venv, no need to `source` first
 ```
 
+Manual path (Linux/macOS, equivalent to the above):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv venv --python 3.11
+source venv/bin/activate
+uv pip install -e ".[all,dev]"
+scripts/run_tests.sh
+```
+
 Windows contributor flow (PowerShell 7+):
 
 ```powershell
@@ -176,14 +192,13 @@ pwsh -NoProfile -File .\scripts\setup.ps1 -SkipSetupWizard
 .\.venv\Scripts\python.exe -m hermes_cli.main setup
 ```
 
-Manual path (equivalent to the above):
+Windows manual path (PowerShell):
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv venv --python 3.11
-source venv/bin/activate
-uv pip install -e ".[all,dev]"
-python -m pytest tests/ -q
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
+uv venv .venv --python 3.11
+.\.venv\Scripts\python.exe -m pip install -e ".[all,dev]"
+pwsh -NoProfile -File .\scripts\run_tests.ps1
 ```
 
 > **RL Training (optional):** To work on the RL/Tinker-Atropos integration:

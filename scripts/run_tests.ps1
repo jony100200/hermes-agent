@@ -78,18 +78,27 @@ $workers = if ($env:HERMES_TEST_WORKERS) { $env:HERMES_TEST_WORKERS } else { '4'
 if ($LASTEXITCODE -ne 0) {
     Write-Info "Installing pytest into active virtual environment"
     & $python -m pip install --quiet "pytest>=8,<9"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install pytest into $python (exit code $LASTEXITCODE)"
+    }
 }
 
 & $python -c "import xdist" *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Info "Installing pytest-xdist into active virtual environment"
     & $python -m pip install --quiet "pytest-xdist>=3,<4"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install pytest-xdist into $python (exit code $LASTEXITCODE)"
+    }
 }
 
 & $python -c "import pytest_split" *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Info "Installing pytest-split into active virtual environment"
     & $python -m pip install --quiet "pytest-split>=0.9,<1"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install pytest-split into $python (exit code $LASTEXITCODE)"
+    }
 }
 
 $pytestCmd = @(
@@ -107,3 +116,6 @@ if ($PytestArgs) {
 
 Write-Info "Running pytest in $repoRoot with $workers workers"
 & $python @pytestCmd
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}

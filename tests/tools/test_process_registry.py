@@ -298,6 +298,44 @@ class TestPruning:
 # =========================================================================
 
 class TestSpawnEnvSanitization:
+    def test_normalize_local_cwd_expands_home(self):
+        normalized = ProcessRegistry._normalize_local_cwd("~", shell_mode="native")
+        assert normalized == os.path.abspath(os.path.expanduser("~"))
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows path conversion only")
+    def test_normalize_local_cwd_converts_bash_drive_prefix(self):
+        normalized = ProcessRegistry._normalize_local_cwd(
+            "/c/Users/tester/My Project",
+            shell_mode="bash_compat",
+        )
+        assert os.path.normcase(normalized) == os.path.normcase(r"C:\Users\tester\My Project")
+
+    def test_spawn_local_normalizes_tilde_cwd(self, registry):
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cwd"] = kwargs["cwd"]
+            proc = MagicMock()
+            proc.pid = 4321
+            proc.stdout = iter([])
+            proc.stdin = MagicMock()
+            proc.poll.return_value = None
+            return proc
+
+        fake_thread = MagicMock()
+
+        with patch("tools.process_registry._find_shell", return_value="/bin/bash"), \
+            patch("subprocess.Popen", side_effect=fake_popen), \
+            patch("threading.Thread", return_value=fake_thread), \
+            patch.object(registry, "_write_checkpoint"):
+            registry.spawn_local(
+                "echo hello",
+                cwd="~",
+                shell_mode="native",
+            )
+
+        assert captured["cwd"] == os.path.abspath(os.path.expanduser("~"))
+
     def test_spawn_local_strips_blocked_vars_from_background_env(self, registry):
         captured = {}
 

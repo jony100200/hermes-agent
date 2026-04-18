@@ -57,6 +57,20 @@ _PROVIDER_ENV_HINTS = (
 )
 
 
+def _ensure_console_safe_encoding() -> None:
+    """Prevent UnicodeEncodeError on legacy Windows console code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
+_ensure_console_safe_encoding()
+
+
 from hermes_constants import is_termux as _is_termux
 
 

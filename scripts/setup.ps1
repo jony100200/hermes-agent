@@ -46,12 +46,21 @@ if (Test-Path $venvDir) {
 if ($uvCmd) {
     Write-Info "Creating virtual environment with uv ($PythonVersion)"
     & $uvCmd venv $venvDir --python $PythonVersion
+    if ($LASTEXITCODE -ne 0) {
+        throw "uv venv failed (exit code $LASTEXITCODE)"
+    }
 } else {
     Write-Warn "uv not found. Falling back to py/python venv creation."
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        & py -$PythonVersion -m venv $venvDir
+        & py "-$PythonVersion" -m venv $venvDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "py -$PythonVersion -m venv failed (exit code $LASTEXITCODE)"
+        }
     } elseif (Get-Command python -ErrorAction SilentlyContinue) {
         & python -m venv $venvDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "python -m venv failed (exit code $LASTEXITCODE)"
+        }
     } else {
         throw "No Python launcher found. Install Python 3.11+ or uv first."
     }
@@ -66,24 +75,45 @@ if ($uvCmd -and (Test-Path (Join-Path $repoRoot "uv.lock"))) {
     try {
         $env:UV_PROJECT_ENVIRONMENT = $venvDir
         & $uvCmd sync --all-extras --locked
+        if ($LASTEXITCODE -ne 0) {
+            throw "uv sync failed (exit code $LASTEXITCODE)"
+        }
         Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
         Write-Success "Dependencies installed from uv.lock"
     } catch {
         Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
         Write-Warn "uv sync failed, falling back to pip editable install"
         & $venvPython -m pip install --upgrade pip setuptools wheel
+        if ($LASTEXITCODE -ne 0) {
+            throw "pip bootstrap failed (exit code $LASTEXITCODE)"
+        }
         try {
             & $venvPython -m pip install -e ".[all]"
+            if ($LASTEXITCODE -ne 0) {
+                throw "pip install -e .[all] failed (exit code $LASTEXITCODE)"
+            }
         } catch {
             & $venvPython -m pip install -e "."
+            if ($LASTEXITCODE -ne 0) {
+                throw "pip install -e . failed (exit code $LASTEXITCODE)"
+            }
         }
     }
 } else {
     & $venvPython -m pip install --upgrade pip setuptools wheel
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip bootstrap failed (exit code $LASTEXITCODE)"
+    }
     try {
         & $venvPython -m pip install -e ".[all]"
+        if ($LASTEXITCODE -ne 0) {
+            throw "pip install -e .[all] failed (exit code $LASTEXITCODE)"
+        }
     } catch {
         & $venvPython -m pip install -e "."
+        if ($LASTEXITCODE -ne 0) {
+            throw "pip install -e . failed (exit code $LASTEXITCODE)"
+        }
     }
     Write-Success "Dependencies installed with pip"
 }
@@ -106,4 +136,7 @@ Write-Host ""
 if (-not $SkipSetupWizard) {
     Write-Info "Launching setup wizard"
     & $venvPython -m hermes_cli.main setup
+    if ($LASTEXITCODE -ne 0) {
+        throw "setup wizard failed (exit code $LASTEXITCODE)"
+    }
 }

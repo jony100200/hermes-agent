@@ -320,7 +320,10 @@ def run_uninstall(args):
         print()
     
     print(color("Reload your shell to complete the process:", Colors.YELLOW))
-    print("  source ~/.bashrc  # or ~/.zshrc")
+    if os.name == "nt":
+        print("  Close and reopen PowerShell")
+    else:
+        print("  source ~/.bashrc  # or ~/.zshrc")
     print()
     print("Thank you for using Hermes Agent! ⚕")
     print()

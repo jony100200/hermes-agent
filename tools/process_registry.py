@@ -42,7 +42,7 @@ import time
 import uuid
 
 _IS_WINDOWS = platform.system() == "Windows"
-from tools.environments.local import _find_shell, _sanitize_subprocess_env
+from tools.environments.local import _find_bash, _find_shell, _sanitize_subprocess_env
 from tools.platform_runtime import build_shell_command, default_temp_dir, terminate_pid_tree
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -264,6 +264,30 @@ class ProcessRegistry:
         return command
 
     @staticmethod
+    def _normalize_local_cwd(cwd: Optional[str], shell_mode: Optional[str] = None) -> str:
+        """Normalize local background cwd across Windows shell modes."""
+        raw = (cwd or "").strip()
+        if not raw:
+            raw = os.getcwd()
+
+        if raw == "~":
+            raw = os.path.expanduser("~")
+        elif raw.startswith("~/") or raw.startswith("~\\"):
+            raw = os.path.expanduser(raw)
+
+        if _IS_WINDOWS and (shell_mode or "").strip().lower() == "bash_compat":
+            slash = raw.replace("\\", "/")
+            match = re.match(r"^/(?:mnt/)?([A-Za-z])(?:/(.*))?$", slash)
+            if match:
+                drive = match.group(1).upper()
+                tail = (match.group(2) or "").replace("/", "\\")
+                raw = f"{drive}:\\{tail}" if tail else f"{drive}:\\"
+
+        if not os.path.isabs(raw):
+            raw = os.path.join(os.getcwd(), raw)
+        return os.path.abspath(raw)
+
+    @staticmethod
     def _is_host_pid_alive(pid: Optional[int]) -> bool:
         """Best-effort liveness check for host-visible PIDs."""
         if not pid:
@@ -340,6 +364,7 @@ class ProcessRegistry:
         session_key: str = "",
         env_vars: dict = None,
         use_pty: bool = False,
+        shell_mode: str | None = None,
     ) -> ProcessSession:
         """
         Spawn a background process locally.
@@ -356,7 +381,7 @@ class ProcessRegistry:
             command=command,
             task_id=task_id,
             session_key=session_key,
-            cwd=cwd or os.getcwd(),
+            cwd=self._normalize_local_cwd(cwd, shell_mode=shell_mode),
             started_at=time.time(),
         )
 
@@ -367,7 +392,8 @@ class ProcessRegistry:
                     from winpty import PtyProcess as _PtyProcessCls
                 else:
                     from ptyprocess import PtyProcess as _PtyProcessCls
-                user_shell = _find_shell()
+                use_bash_compat = _IS_WINDOWS and (shell_mode or "").strip().lower() == "bash_compat"
+                user_shell = _find_bash() if use_bash_compat else _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
                 normalized_command = self._normalize_command_for_shell(command, user_shell)
@@ -407,7 +433,8 @@ class ProcessRegistry:
         # Standard Popen path (non-PTY or PTY fallback)
         # Use the user's login shell for consistency with LocalEnvironment --
         # ensures rc files are sourced and user tools are available.
-        user_shell = _find_shell()
+        use_bash_compat = _IS_WINDOWS and (shell_mode or "").strip().lower() == "bash_compat"
+        user_shell = _find_bash() if use_bash_compat else _find_shell()
         # Force unbuffered output for Python scripts so progress is visible
         # during background execution (libraries like tqdm/datasets buffer when
         # stdout is a pipe, hiding output from process(action="poll")).

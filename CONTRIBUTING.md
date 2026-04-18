@@ -62,6 +62,8 @@ If your skill is specialized, community-contributed, or niche, it's better suite
 
 ### Clone and install
 
+Linux/macOS/WSL:
+
 ```bash
 git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git
 cd hermes-agent
@@ -80,7 +82,17 @@ uv pip install -e ".[all,dev]"
 npm install
 ```
 
+Windows (PowerShell 7+):
+
+```powershell
+git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git
+cd hermes-agent
+pwsh -NoProfile -File .\scripts\setup.ps1 -SkipSetupWizard
+```
+
 ### Configure for development
+
+Linux/macOS/WSL:
 
 ```bash
 mkdir -p ~/.hermes/{cron,sessions,logs,memories,skills}
@@ -91,7 +103,23 @@ touch ~/.hermes/.env
 echo 'OPENROUTER_API_KEY=sk-or-v1-your-key' >> ~/.hermes/.env
 ```
 
+Windows (PowerShell 7+):
+
+```powershell
+$hermesHome = Join-Path $HOME ".hermes"
+"cron","sessions","logs","memories","skills" | ForEach-Object {
+  New-Item -ItemType Directory -Force -Path (Join-Path $hermesHome $_) | Out-Null
+}
+Copy-Item .\cli-config.yaml.example (Join-Path $hermesHome "config.yaml") -Force
+if (-not (Test-Path (Join-Path $hermesHome ".env"))) {
+  New-Item -ItemType File -Path (Join-Path $hermesHome ".env") | Out-Null
+}
+Add-Content (Join-Path $hermesHome ".env") 'OPENROUTER_API_KEY=sk-or-v1-your-key'
+```
+
 ### Run
+
+Linux/macOS/WSL:
 
 ```bash
 # Symlink for global access
@@ -103,10 +131,29 @@ hermes doctor
 hermes chat -q "Hello"
 ```
 
+Windows (PowerShell 7+):
+
+```powershell
+.\.venv\Scripts\python.exe -m hermes_cli.main doctor
+.\.venv\Scripts\python.exe -m hermes_cli.main chat -q "Hello"
+```
+
 ### Run tests
 
+Linux/macOS/WSL:
+
 ```bash
-pytest tests/ -v
+scripts/run_tests.sh
+scripts/run_tests.sh tests/tools/
+scripts/run_tests.sh tests/tools/test_windows_compat.py
+```
+
+Windows (PowerShell 7+):
+
+```powershell
+pwsh -NoProfile -File .\scripts\run_tests.ps1
+pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\tools\
+pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\tools\test_windows_compat.py
 ```
 
 ---
@@ -595,7 +642,7 @@ refactor/description   # Code restructuring
 
 ### Before submitting
 
-1. **Run tests**: `pytest tests/ -v`
+1. **Run tests**: use the platform wrapper (`scripts/run_tests.sh` on Linux/macOS/WSL, `pwsh -NoProfile -File .\scripts\run_tests.ps1` on Windows)
 2. **Test manually**: Run `hermes` and exercise the code path you changed
 3. **Check cross-platform impact**: If you touch file I/O, process management, or terminal handling, consider Windows and macOS
 4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.

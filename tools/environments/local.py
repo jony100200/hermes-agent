@@ -165,21 +165,56 @@ def _find_legacy_bash() -> str:
             or "/bin/sh"
         )
 
+    def _is_wsl_system_bash(path: str) -> bool:
+        norm = os.path.normcase(os.path.abspath(path))
+        wsl_bash = os.path.normcase(os.path.abspath(r"C:\Windows\System32\bash.exe"))
+        return norm == wsl_bash
+
+    def _looks_like_git_bash(path: str) -> bool:
+        norm = os.path.normcase(path).replace("\\", "/")
+        return norm.endswith("/git/bin/bash.exe")
+
     custom = os.environ.get("HERMES_GIT_BASH_PATH")
     if custom and os.path.isfile(custom):
+        if _is_wsl_system_bash(custom):
+            raise RuntimeError(
+                "HERMES_GIT_BASH_PATH points to WSL bash.exe, which is unsupported for "
+                "Hermes bash compatibility mode on Windows. Point it to Git Bash "
+                "(...\\Git\\bin\\bash.exe) instead."
+            )
         return custom
 
     for candidate in (
         os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "bin", "bash.exe"),
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "usr", "bin", "bash.exe"),
         os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git", "bin", "bash.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git", "usr", "bin", "bash.exe"),
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "bin", "bash.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "usr", "bin", "bash.exe"),
     ):
         if candidate and os.path.isfile(candidate):
             return candidate
 
+    git_exe = shutil.which("git")
+    if git_exe:
+        git_root = os.path.dirname(os.path.dirname(git_exe))
+        for candidate in (
+            os.path.join(git_root, "bin", "bash.exe"),
+            os.path.join(git_root, "usr", "bin", "bash.exe"),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+
     found = shutil.which("bash")
     if found:
-        return found
+        if _is_wsl_system_bash(found):
+            raise RuntimeError(
+                "Found Windows WSL bash.exe on PATH, but Hermes bash compatibility mode "
+                "requires Git Bash for correct exit-code behavior. "
+                "Install Git for Windows and ensure ...\\Git\\bin\\bash.exe is on PATH."
+            )
+        if _looks_like_git_bash(found):
+            return found
 
     raise RuntimeError(
         "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
@@ -212,8 +247,14 @@ _SANE_PATH = (
 )
 
 
-def _make_run_env(env: dict) -> dict:
-    """Build a run environment with a sane PATH and provider-var stripping."""
+def _make_run_env(env: dict, *, posix_path_hint: bool = True) -> dict:
+    """Build a run environment with provider-var stripping.
+
+    Args:
+        posix_path_hint: When True, append a POSIX fallback PATH segment used
+            by bash-compat execution. Keep False for Windows-native shells so
+            we don't inject mixed PATH separators.
+    """
     try:
         from tools.env_passthrough import is_env_passthrough as _is_passthrough
     except Exception:
@@ -228,7 +269,7 @@ def _make_run_env(env: dict) -> dict:
         elif k not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(k):
             run_env[k] = v
     existing_path = run_env.get("PATH", "")
-    if "/usr/bin" not in existing_path.split(":"):
+    if posix_path_hint and "/usr/bin" not in existing_path.split(":"):
         run_env["PATH"] = f"{existing_path}:{_SANE_PATH}" if existing_path else _SANE_PATH
 
     # Per-profile HOME isolation: redirect system tool configs (git, ssh, gh,
@@ -245,14 +286,53 @@ def _make_run_env(env: dict) -> dict:
 class LocalEnvironment(BaseEnvironment):
     """Run commands directly on the host machine.
 
-    Spawn-per-call: every execute() spawns a fresh bash process.
-    Session snapshot preserves env vars across calls.
-    CWD persists via file-based read after each command.
+    On Unix and Windows bash-compat mode: spawn-per-call through bash with
+    session snapshot semantics.
+
+    On Windows native mode: execute directly in the preferred host shell
+    (PowerShell/cmd/Git Bash), with explicit cwd handling and no bash snapshot
+    wrapper. This keeps the primary Windows flow shell-native.
     """
 
-    def __init__(self, cwd: str = "", timeout: int = 60, env: dict = None):
+    def __init__(self, cwd: str = "", timeout: int = 60, env: dict = None, shell_mode: str | None = None):
+        requested_mode = (shell_mode or "").strip().lower()
+        default_mode = "native" if _IS_WINDOWS else "bash_compat"
+        self._shell_mode = requested_mode or default_mode
+        if self._shell_mode not in {"native", "bash_compat"}:
+            raise ValueError(f"Invalid LocalEnvironment shell_mode={shell_mode!r}. Use 'native' or 'bash_compat'.")
+        self._native_shell = _find_shell() if (_IS_WINDOWS and self._shell_mode == "native") else None
+
         super().__init__(cwd=cwd or os.getcwd(), timeout=timeout, env=env)
-        self.init_session()
+
+        # In bash compatibility mode on Windows, convert host cwd up front so
+        # the first wrapped command can cd successfully.
+        if _IS_WINDOWS and self._shell_mode == "bash_compat":
+            self.cwd = self.normalize_path_for_shell(self.cwd)
+
+        if self._use_windows_native_shell():
+            self._snapshot_ready = False
+        else:
+            self.init_session()
+
+    def _use_windows_native_shell(self) -> bool:
+        return _IS_WINDOWS and self._shell_mode == "native"
+
+    def _resolve_windows_workdir(self, cwd: str | None) -> str:
+        """Resolve cwd for Windows-native execution."""
+        raw = (cwd or "").strip()
+        if not raw:
+            raw = self.cwd
+
+        if raw in {"~", ""}:
+            resolved = os.path.expanduser("~")
+        elif raw.startswith("~/") or raw.startswith("~\\"):
+            resolved = os.path.expanduser(raw)
+        elif os.path.isabs(raw):
+            resolved = raw
+        else:
+            resolved = os.path.join(self.cwd or os.getcwd(), raw)
+
+        return os.path.abspath(os.path.expanduser(resolved))
 
     def get_temp_dir(self) -> str:
         """Return a shell-safe writable temp dir for local execution.
@@ -267,8 +347,10 @@ class LocalEnvironment(BaseEnvironment):
         custom TMPDIR), then fall back to the host process environment.
         """
         if _IS_WINDOWS:
-            # LocalEnvironment executes through bash semantics; keep session
-            # artifact paths in bash-compatible form.
+            # Windows native mode should use a real host temp directory.
+            # Bash-compat mode keeps /tmp semantics for snapshot artifacts.
+            if self._use_windows_native_shell():
+                return default_temp_dir()
             return "/tmp"
 
         for env_var in ("TMPDIR", "TMP", "TEMP"):
@@ -288,9 +370,12 @@ class LocalEnvironment(BaseEnvironment):
     def _run_bash(self, cmd_string: str, *, login: bool = False,
                   timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
+        if self._use_windows_native_shell():
+            raise RuntimeError("_run_bash called in Windows native shell mode")
+
         shell = _find_bash()
         args = build_shell_command(shell, cmd_string, login=login)
-        run_env = _make_run_env(self.env)
+        run_env = _make_run_env(self.env, posix_path_hint=True)
 
         proc = subprocess.Popen(
             args,
@@ -308,6 +393,68 @@ class LocalEnvironment(BaseEnvironment):
             _pipe_stdin(proc, stdin_data)
 
         return proc
+
+    def _run_windows_native_shell(
+        self,
+        command: str,
+        *,
+        cwd: str,
+        timeout: int,
+        stdin_data: str | None = None,
+    ) -> dict:
+        exec_command, sudo_stdin = self._prepare_command(command)
+        if sudo_stdin is not None and stdin_data is not None:
+            effective_stdin = sudo_stdin + stdin_data
+        elif sudo_stdin is not None:
+            effective_stdin = sudo_stdin
+        else:
+            effective_stdin = stdin_data
+
+        shell = self._native_shell or _find_shell()
+        argv = build_shell_command(shell, exec_command, login=False, interactive=False)
+        run_env = _make_run_env(self.env, posix_path_hint=False)
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            text=True,
+            env=run_env,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE if effective_stdin is not None else subprocess.DEVNULL,
+            preexec_fn=None,
+        )
+        if effective_stdin is not None:
+            _pipe_stdin(proc, effective_stdin)
+
+        return self._wait_for_process(proc, timeout=timeout)
+
+    def execute(
+        self,
+        command: str,
+        cwd: str = "",
+        *,
+        timeout: int | None = None,
+        stdin_data: str | None = None,
+    ) -> dict:
+        """Execute a command, preserving the BaseEnvironment API."""
+        if self._use_windows_native_shell():
+            effective_timeout = timeout or self.timeout
+            effective_cwd = self._resolve_windows_workdir(cwd or self.cwd)
+            result = self._run_windows_native_shell(
+                command,
+                cwd=effective_cwd,
+                timeout=effective_timeout,
+                stdin_data=stdin_data,
+            )
+            self.cwd = effective_cwd
+            return result
+
+        # Bash-compat path (Unix + explicit Windows compatibility mode)
+        if _IS_WINDOWS and cwd:
+            cwd = self.normalize_path_for_shell(cwd)
+        return super().execute(command, cwd=cwd, timeout=timeout, stdin_data=stdin_data)
 
     def _kill_process(self, proc):
         """Kill the entire process group (all children)."""
@@ -349,4 +496,6 @@ class LocalEnvironment(BaseEnvironment):
 
     def normalize_path_for_shell(self, path: str) -> str:
         """Normalize host paths for the configured bash runtime on Windows."""
+        if self._use_windows_native_shell():
+            return path
         return _windows_to_bash_path(path, _find_bash())

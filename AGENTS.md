@@ -4,8 +4,16 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 
 ## Development Environment
 
+Linux/macOS/WSL:
+
 ```bash
 source venv/bin/activate  # ALWAYS activate before running Python
+```
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\Activate.ps1  # ALWAYS activate before running Python
 ```
 
 ## Project Structure
@@ -572,6 +580,11 @@ at minimum activate the venv and pass `-n 4`:
 ```bash
 source venv/bin/activate
 python -m pytest tests/ -q -n 4
+```
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pytest tests\ -q -n 4
 ```
 
 Worker count above 4 will surface test-ordering flakes that CI never sees.
