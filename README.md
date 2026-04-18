@@ -37,7 +37,14 @@ Works on Linux, macOS, WSL2, and Android via Termux. The installer handles the p
 
 > **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
 >
-> **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
+> **Windows (PowerShell 7+):**
+> ```powershell
+> irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex
+> ```
+> If you already cloned this repo, use:
+> ```powershell
+> pwsh -NoProfile -File .\scripts\setup.ps1
+> ```
 
 After installation:
 
@@ -45,6 +52,16 @@ After installation:
 source ~/.bashrc    # reload shell (or: source ~/.zshrc)
 hermes              # start chatting!
 ```
+
+On Windows (PowerShell 7+):
+
+```powershell
+hermes
+pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\tools\test_windows_compat.py
+```
+
+Known Windows limitation:
+- Local terminal execution uses bash semantics for command snapshots; install Git for Windows (Git Bash) for full local terminal tool compatibility.
 
 ---
 
@@ -141,13 +158,22 @@ See `hermes claw migrate --help` for all options, or use the `openclaw-migration
 
 We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
 
-Quick start for contributors — clone and go with `setup-hermes.sh`:
+Quick start for contributors — clone and go with `setup-hermes.sh` (Linux/macOS):
 
 ```bash
 git clone https://github.com/NousResearch/hermes-agent.git
 cd hermes-agent
 ./setup-hermes.sh     # installs uv, creates venv, installs .[all], symlinks ~/.local/bin/hermes
 ./hermes              # auto-detects the venv, no need to `source` first
+```
+
+Windows contributor flow (PowerShell 7+):
+
+```powershell
+git clone https://github.com/NousResearch/hermes-agent.git
+cd hermes-agent
+pwsh -NoProfile -File .\scripts\setup.ps1 -SkipSetupWizard
+.\.venv\Scripts\python.exe -m hermes_cli.main setup
 ```
 
 Manual path (equivalent to the above):

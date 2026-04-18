@@ -1338,8 +1338,9 @@ class BasePlatformAdapter(ABC):
         """
         Detect bare local file paths in response text for native media delivery.
 
-        Matches absolute paths (/...) and tilde paths (~/) ending in common
-        image or video extensions.  Validates each candidate with
+        Matches absolute paths (/...), tilde paths (~/), and Windows drive
+        paths (C:\\... or C:/...) ending in common image or video extensions.
+        Validates each candidate with
         ``os.path.isfile()`` to avoid false positives from URLs or
         non-existent paths.
 
@@ -1356,13 +1357,17 @@ class BasePlatformAdapter(ABC):
         )
         ext_part = '|'.join(e.lstrip('.') for e in _LOCAL_MEDIA_EXTS)
 
-        # (?<![/:\w.]) prevents matching inside URLs (e.g. https://…/img.png)
-        #             and relative paths (./foo.png)
-        # (?:~/|/)    anchors to absolute or home-relative paths
-        path_re = re.compile(
-            r'(?<![/:\w.])(?:~/|/)(?:[\w.\-]+/)*[\w.\-]+\.(?:' + ext_part + r')\b',
-            re.IGNORECASE,
+        # (?<![/:\w.]) prevents matching inside URLs (e.g. https://.../img.png)
+        # and relative paths like ./image.png.
+        # Support both POSIX and Windows absolute path forms.
+        posix_pattern = r'(?<![/:\w.])(?:~/|/)(?:[\w.\-]+/)*[\w.\-]+\.(?:' + ext_part + r')\b'
+        windows_pattern = (
+            r'(?<![\w])'
+            r'(?:[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\r\n]+\.(?:'
+            + ext_part
+            + r'))\b'
         )
+        path_re = re.compile(f"(?:{posix_pattern})|(?:{windows_pattern})", re.IGNORECASE)
 
         # Build spans covered by fenced code blocks and inline code
         code_spans: list = []

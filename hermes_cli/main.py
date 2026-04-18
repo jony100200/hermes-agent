@@ -6169,7 +6169,13 @@ def cmd_profile(args):
             if wrapper_path:
                 # If custom name, write the profile name into the wrapper
                 if custom_name:
-                    wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {name} "$@"\n')
+                    if sys.platform == "win32":
+                        wrapper_path.write_text(
+                            f"@echo off\r\nhermes -p {name} %*\r\n",
+                            encoding="utf-8",
+                        )
+                    else:
+                        wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {name} "$@"\n')
                 print(f"✓ Alias created: {wrapper_path}")
                 if not _is_wrapper_dir_in_path():
                     print(f"⚠ {_get_wrapper_dir()} is not in your PATH.")

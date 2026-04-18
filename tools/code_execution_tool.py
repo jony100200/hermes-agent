@@ -552,14 +552,14 @@ def _env_temp_dir(env: Any) -> str:
     if callable(get_temp_dir):
         try:
             temp_dir = get_temp_dir()
-            if isinstance(temp_dir, str) and temp_dir.startswith("/"):
-                return temp_dir.rstrip("/") or "/"
+            if isinstance(temp_dir, str) and os.path.isabs(temp_dir):
+                return temp_dir.rstrip("/\\") or temp_dir
         except Exception as exc:
             logger.debug("Could not resolve execute_code env temp dir: %s", exc)
     candidate = tempfile.gettempdir()
-    if isinstance(candidate, str) and candidate.startswith("/"):
-        return candidate.rstrip("/") or "/"
-    return "/tmp"
+    if isinstance(candidate, str) and candidate:
+        return candidate.rstrip("/\\") or candidate
+    return tempfile.gettempdir()
 
 
 def _rpc_poll_loop(
