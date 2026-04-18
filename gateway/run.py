@@ -7335,34 +7335,49 @@ class GatewayRunner:
         # --gateway enables file-based IPC for interactive prompts (stash
         # restore, config migration) so the gateway can forward them to the
         # user instead of silently skipping them.
-        # Use setsid for portable session detach (works under system services
-        # where systemd-run --user fails due to missing D-Bus session).
         # PYTHONUNBUFFERED ensures output is flushed line-by-line so the
         # gateway can stream it to the messenger in near-real-time.
-        hermes_cmd_str = " ".join(shlex.quote(part) for part in hermes_cmd)
-        update_cmd = (
-            f"PYTHONUNBUFFERED=1 {hermes_cmd_str} update --gateway"
-            f" > {shlex.quote(str(output_path))} 2>&1; "
-            f"status=$?; printf '%s' \"$status\" > {shlex.quote(str(exit_code_path))}"
-        )
         try:
-            setsid_bin = shutil.which("setsid")
-            if setsid_bin:
-                # Preferred: setsid creates a new session, fully detached
+            if os.name == "nt":
+                hermes_cmd_str = subprocess.list2cmdline(hermes_cmd)
+                output_q = str(output_path).replace('"', '""')
+                exit_q = str(exit_code_path).replace('"', '""')
+                update_cmd = (
+                    f"set PYTHONUNBUFFERED=1 && {hermes_cmd_str} update --gateway"
+                    f" > \"{output_q}\" 2>&1 && (echo 0 > \"{exit_q}\")"
+                    f" || (echo %errorlevel% > \"{exit_q}\")"
+                )
                 subprocess.Popen(
-                    [setsid_bin, "bash", "-c", update_cmd],
+                    ["cmd.exe", "/d", "/s", "/c", update_cmd],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
                     start_new_session=True,
                 )
             else:
-                # Fallback: start_new_session=True calls os.setsid() in child
-                subprocess.Popen(
-                    ["bash", "-c", update_cmd],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
+                hermes_cmd_str = " ".join(shlex.quote(part) for part in hermes_cmd)
+                update_cmd = (
+                    f"PYTHONUNBUFFERED=1 {hermes_cmd_str} update --gateway"
+                    f" > {shlex.quote(str(output_path))} 2>&1; "
+                    f"status=$?; printf '%s' \"$status\" > {shlex.quote(str(exit_code_path))}"
                 )
+                setsid_bin = shutil.which("setsid")
+                if setsid_bin:
+                    # Preferred: setsid creates a new session, fully detached
+                    subprocess.Popen(
+                        [setsid_bin, "bash", "-c", update_cmd],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                else:
+                    # Fallback: start_new_session=True calls os.setsid() in child
+                    subprocess.Popen(
+                        ["bash", "-c", update_cmd],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
         except Exception as e:
             pending_path.unlink(missing_ok=True)
             exit_code_path.unlink(missing_ok=True)

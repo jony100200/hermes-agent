@@ -26,6 +26,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
@@ -149,6 +150,11 @@ def _get_active_profile_path() -> Path:
 
 def _get_wrapper_dir() -> Path:
     """Return the directory for wrapper scripts."""
+    if sys.platform == "win32":
+        local_app_data = os.getenv("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "hermes" / "bin"
+        return Path.home() / "AppData" / "Local" / "hermes" / "bin"
     return Path.home() / ".local" / "bin"
 
 
@@ -197,35 +203,30 @@ def check_alias_collision(name: str) -> Optional[str]:
 
     # Check existing commands in PATH
     wrapper_dir = _get_wrapper_dir()
-    try:
-        result = subprocess.run(
-            ["which", name], capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            existing_path = result.stdout.strip()
-            # Allow overwriting our own wrappers
-            if existing_path == str(wrapper_dir / name):
+    existing_path = shutil.which(name)
+    if existing_path:
+        our_candidates = [wrapper_dir / name, wrapper_dir / f"{name}.cmd"]
+        for candidate in our_candidates:
+            if Path(existing_path).resolve() == candidate.resolve():
                 try:
-                    content = (wrapper_dir / name).read_text()
+                    content = candidate.read_text(encoding="utf-8", errors="ignore")
                     if "hermes -p" in content:
-                        return None  # it's our wrapper, safe to overwrite
+                        return None
                 except Exception:
                     pass
-            return f"'{name}' conflicts with an existing command ({existing_path})"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+        return f"'{name}' conflicts with an existing command ({existing_path})"
 
     return None  # safe
 
 
 def _is_wrapper_dir_in_path() -> bool:
-    """Check if ~/.local/bin is in PATH."""
+    """Check if wrapper directory is in PATH."""
     wrapper_dir = str(_get_wrapper_dir())
     return wrapper_dir in os.environ.get("PATH", "").split(os.pathsep)
 
 
 def create_wrapper_script(name: str) -> Optional[Path]:
-    """Create a shell wrapper script at ~/.local/bin/<name>.
+    """Create a profile wrapper command in the platform wrapper directory.
 
     Returns the path to the created wrapper, or None if creation failed.
     """
@@ -236,10 +237,16 @@ def create_wrapper_script(name: str) -> Optional[Path]:
         print(f"⚠ Could not create {wrapper_dir}: {e}")
         return None
 
-    wrapper_path = wrapper_dir / name
+    wrapper_path = wrapper_dir / (f"{name}.cmd" if sys.platform == "win32" else name)
     try:
-        wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {name} "$@"\n')
-        wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        if sys.platform == "win32":
+            wrapper_path.write_text(
+                f"@echo off\r\nhermes -p {name} %*\r\n",
+                encoding="utf-8",
+            )
+        else:
+            wrapper_path.write_text(f'#!/bin/sh\nexec hermes -p {name} "$@"\n')
+            wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         return wrapper_path
     except OSError as e:
         print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
@@ -248,16 +255,18 @@ def create_wrapper_script(name: str) -> Optional[Path]:
 
 def remove_wrapper_script(name: str) -> bool:
     """Remove the wrapper script for a profile. Returns True if removed."""
-    wrapper_path = _get_wrapper_dir() / name
-    if wrapper_path.exists():
-        try:
-            # Verify it's our wrapper before removing
-            content = wrapper_path.read_text()
-            if "hermes -p" in content:
-                wrapper_path.unlink()
-                return True
-        except Exception:
-            pass
+    wrapper_dir = _get_wrapper_dir()
+    candidates = [wrapper_dir / name, wrapper_dir / f"{name}.cmd"]
+    for wrapper_path in candidates:
+        if wrapper_path.exists():
+            try:
+                # Verify it's our wrapper before removing
+                content = wrapper_path.read_text(encoding="utf-8", errors="ignore")
+                if "hermes -p" in content:
+                    wrapper_path.unlink()
+                    return True
+            except Exception:
+                pass
     return False
 
 
@@ -638,8 +647,8 @@ def _cleanup_gateway_service(name: str, profile_dir: Path) -> None:
 
 def _stop_gateway_process(profile_dir: Path) -> None:
     """Stop a running gateway process via its PID file."""
-    import signal as _signal
     import time as _time
+    from gateway.status import terminate_pid
 
     pid_file = profile_dir / "gateway.pid"
     if not pid_file.exists():
@@ -649,7 +658,7 @@ def _stop_gateway_process(profile_dir: Path) -> None:
         raw = pid_file.read_text().strip()
         data = json.loads(raw) if raw.startswith("{") else {"pid": int(raw)}
         pid = int(data["pid"])
-        os.kill(pid, _signal.SIGTERM)
+        terminate_pid(pid, force=False)
         # Wait up to 10s for graceful shutdown
         for _ in range(20):
             _time.sleep(0.5)
@@ -660,7 +669,7 @@ def _stop_gateway_process(profile_dir: Path) -> None:
                 return
         # Force kill
         try:
-            os.kill(pid, _signal.SIGKILL)
+            terminate_pid(pid, force=True)
         except ProcessLookupError:
             pass
         print(f"✓ Gateway force-stopped (PID {pid})")

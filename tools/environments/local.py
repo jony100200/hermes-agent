@@ -8,6 +8,12 @@ import subprocess
 import tempfile
 
 from tools.environments.base import BaseEnvironment, _pipe_stdin
+from tools.platform_runtime import (
+    build_shell_command,
+    default_temp_dir,
+    find_preferred_shell,
+    terminate_pid_tree,
+)
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -139,7 +145,17 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
 
 
 def _find_bash() -> str:
-    """Find bash for command execution."""
+    """Find a shell for command execution (legacy name for compatibility)."""
+    return find_preferred_shell()
+
+
+def _find_shell() -> str:
+    """Find the preferred local shell executable."""
+    return find_preferred_shell()
+
+
+def _find_legacy_bash() -> str:
+    """Find Git Bash specifically for compatibility callers that require it."""
     if not _IS_WINDOWS:
         return (
             shutil.which("bash")
@@ -170,10 +186,6 @@ def _find_bash() -> str:
         "Install it from: https://git-scm.com/download/win\n"
         "Or set HERMES_GIT_BASH_PATH to your bash.exe location."
     )
-
-
-# Backward compat — process_registry.py imports this name
-_find_shell = _find_bash
 
 
 # Standard PATH entries for environments with minimal PATH.
@@ -239,8 +251,11 @@ class LocalEnvironment(BaseEnvironment):
         """
         for env_var in ("TMPDIR", "TMP", "TEMP"):
             candidate = self.env.get(env_var) or os.environ.get(env_var)
-            if candidate and candidate.startswith("/"):
-                return candidate.rstrip("/") or "/"
+            if candidate and os.path.isabs(candidate):
+                return candidate.rstrip("/\\") or candidate
+
+        if _IS_WINDOWS:
+            return default_temp_dir()
 
         if os.path.isdir("/tmp") and os.access("/tmp", os.W_OK | os.X_OK):
             return "/tmp"
@@ -249,13 +264,13 @@ class LocalEnvironment(BaseEnvironment):
         if candidate.startswith("/"):
             return candidate.rstrip("/") or "/"
 
-        return "/tmp"
+        return default_temp_dir()
 
     def _run_bash(self, cmd_string: str, *, login: bool = False,
                   timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
-        bash = _find_bash()
-        args = [bash, "-l", "-c", cmd_string] if login else [bash, "-c", cmd_string]
+        shell = _find_bash()
+        args = build_shell_command(shell, cmd_string, login=login)
         run_env = _make_run_env(self.env)
 
         proc = subprocess.Popen(
@@ -279,7 +294,7 @@ class LocalEnvironment(BaseEnvironment):
         """Kill the entire process group (all children)."""
         try:
             if _IS_WINDOWS:
-                proc.terminate()
+                terminate_pid_tree(proc.pid, force=True)
             else:
                 pgid = os.getpgid(proc.pid)
                 os.killpg(pgid, signal.SIGTERM)

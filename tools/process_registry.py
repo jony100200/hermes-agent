@@ -42,6 +42,7 @@ import uuid
 
 _IS_WINDOWS = platform.system() == "Windows"
 from tools.environments.local import _find_shell, _sanitize_subprocess_env
+from tools.platform_runtime import build_shell_command, default_temp_dir, terminate_pid_tree
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -282,14 +283,7 @@ class ProcessRegistry:
     @staticmethod
     def _terminate_host_pid(pid: int) -> None:
         """Terminate a host-visible PID without requiring the original process handle."""
-        if _IS_WINDOWS:
-            os.kill(pid, signal.SIGTERM)
-            return
-
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (OSError, ProcessLookupError, PermissionError):
-            os.kill(pid, signal.SIGTERM)
+        terminate_pid_tree(pid, force=False)
 
     # ----- Spawn -----
 
@@ -300,11 +294,11 @@ class ProcessRegistry:
         if callable(get_temp_dir):
             try:
                 temp_dir = get_temp_dir()
-                if isinstance(temp_dir, str) and temp_dir.startswith("/"):
-                    return temp_dir.rstrip("/") or "/"
+                if isinstance(temp_dir, str) and os.path.isabs(temp_dir):
+                    return temp_dir.rstrip("/\\") or temp_dir
             except Exception as exc:
                 logger.debug("Could not resolve environment temp dir: %s", exc)
-        return "/tmp"
+        return default_temp_dir()
 
     def spawn_local(
         self,
@@ -344,8 +338,9 @@ class ProcessRegistry:
                 user_shell = _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
+                pty_argv = build_shell_command(user_shell, command, interactive=True)
                 pty_proc = _PtyProcessCls.spawn(
-                    [user_shell, "-lic", f"set +m; {command}"],
+                    pty_argv,
                     cwd=session.cwd,
                     env=pty_env,
                     dimensions=(30, 120),
@@ -385,8 +380,9 @@ class ProcessRegistry:
         # stdout is a pipe, hiding output from process(action="poll")).
         bg_env = _sanitize_subprocess_env(os.environ, env_vars)
         bg_env["PYTHONUNBUFFERED"] = "1"
+        shell_argv = build_shell_command(user_shell, command, interactive=True)
         proc = subprocess.Popen(
-            [user_shell, "-lic", f"set +m; {command}"],
+            shell_argv,
             text=True,
             cwd=session.cwd,
             env=bg_env,
@@ -801,12 +797,12 @@ class ProcessRegistry:
                     session._pty.terminate(force=True)
                 except Exception:
                     if session.pid:
-                        os.kill(session.pid, signal.SIGTERM)
+                        terminate_pid_tree(session.pid, force=False)
             elif session.process:
                 # Local process -- kill the process group
                 try:
                     if _IS_WINDOWS:
-                        session.process.terminate()
+                        terminate_pid_tree(session.process.pid, force=True)
                     else:
                         os.killpg(os.getpgid(session.process.pid), signal.SIGTERM)
                 except (ProcessLookupError, PermissionError):
