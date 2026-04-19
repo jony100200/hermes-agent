@@ -1094,6 +1094,8 @@ class _SkinAwareAnsi:
 
 _ACCENT = _SkinAwareAnsi("response_border", "#FFD700", bold=True)
 _DIM = _SkinAwareAnsi("banner_dim", "#B8860B")
+_CPRINT_LOCK = threading.Lock()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _accent_hex() -> str:
@@ -1115,13 +1117,43 @@ def _rich_text_from_ansi(text: str) -> _RichText:
 
 
 def _cprint(text: str):
-    """Print ANSI-colored text through prompt_toolkit's native renderer.
+    """Print status text without corrupting prompt_toolkit input rendering.
 
-    Raw ANSI escapes written via print() are swallowed by patch_stdout's
-    StdoutProxy.  Routing through print_formatted_text(ANSI(...)) lets
-    prompt_toolkit parse the escapes and render real colors.
+    When ``patch_stdout`` is active, writing through ``StdoutProxy`` preserves
+    the current input line and cursor position, which prevents typed text from
+    disappearing while background updates arrive.
     """
-    _pt_print(_PT_ANSI(text))
+    text = str(text)
+    with _CPRINT_LOCK:
+        try:
+            from prompt_toolkit.patch_stdout import StdoutProxy
+            in_prompt_session = isinstance(sys.stdout, StdoutProxy)
+        except Exception:
+            in_prompt_session = False
+
+        if in_prompt_session:
+            # Route through StdoutProxy (prompt_toolkit-safe) and strip ANSI
+            # escapes so no raw control bytes interfere with Windows consoles.
+            plain = _ANSI_ESCAPE_RE.sub("", text)
+            try:
+                if plain.endswith("\n"):
+                    sys.stdout.write(plain)
+                else:
+                    sys.stdout.write(plain + "\n")
+                sys.stdout.flush()
+                return
+            except Exception:
+                pass
+
+        try:
+            _pt_print(_PT_ANSI(text))
+        except Exception:
+            # Last-resort fallback: preserve visibility over formatting.
+            plain = _ANSI_ESCAPE_RE.sub("", text)
+            try:
+                print(plain, flush=True)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

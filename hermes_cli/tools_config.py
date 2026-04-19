@@ -383,33 +383,37 @@ TOOLSET_ENV_REQUIREMENTS = {
 def _run_post_setup(post_setup_key: str):
     """Run post-setup hooks for tools that need extra installation steps."""
     import shutil
+    import subprocess
+
+    def _safe_run(command: List[str], cwd: Optional[str] = None):
+        """Run a subprocess and convert launch failures into user-facing warnings."""
+        try:
+            return subprocess.run(command, capture_output=True, text=True, cwd=cwd)
+        except OSError as exc:
+            cmd_display = " ".join(command)
+            _print_warning(f"    Failed to launch '{cmd_display}': {exc}")
+            return None
+
     if post_setup_key in ("agent_browser", "browserbase"):
         node_modules = PROJECT_ROOT / "node_modules" / "agent-browser"
-        if not node_modules.exists() and shutil.which("npm"):
+        npm_bin = shutil.which("npm")
+        if not node_modules.exists() and npm_bin:
             _print_info("    Installing Node.js dependencies for browser tools...")
-            import subprocess
-            result = subprocess.run(
-                ["npm", "install", "--silent"],
-                capture_output=True, text=True, cwd=str(PROJECT_ROOT)
-            )
-            if result.returncode == 0:
+            result = _safe_run([npm_bin, "install", "--silent"], cwd=str(PROJECT_ROOT))
+            if result and result.returncode == 0:
                 _print_success("    Node.js dependencies installed")
             else:
-                from hermes_constants import display_hermes_home
-                _print_warning(f"    npm install failed - run manually: cd {display_hermes_home()}/hermes-agent && npm install")
+                _print_warning(f"    npm install failed - run manually: cd {PROJECT_ROOT} && npm install")
         elif not node_modules.exists():
             _print_warning("    Node.js not found - browser tools require: npm install (in hermes-agent directory)")
 
     elif post_setup_key == "camofox":
         camofox_dir = PROJECT_ROOT / "node_modules" / "@askjo" / "camofox-browser"
-        if not camofox_dir.exists() and shutil.which("npm"):
+        npm_bin = shutil.which("npm")
+        if not camofox_dir.exists() and npm_bin:
             _print_info("    Installing Camofox browser server...")
-            import subprocess
-            result = subprocess.run(
-                ["npm", "install", "--silent"],
-                capture_output=True, text=True, cwd=str(PROJECT_ROOT)
-            )
-            if result.returncode == 0:
+            result = _safe_run([npm_bin, "install", "--silent"], cwd=str(PROJECT_ROOT))
+            if result and result.returncode == 0:
                 _print_success("    Camofox installed")
             else:
                 _print_warning("    npm install failed - run manually: npm install")
@@ -429,19 +433,14 @@ def _run_post_setup(post_setup_key: str):
             tinker_dir = PROJECT_ROOT / "tinker-atropos"
             if tinker_dir.exists() and (tinker_dir / "pyproject.toml").exists():
                 _print_info("    Installing tinker-atropos submodule...")
-                import subprocess
                 uv_bin = shutil.which("uv")
                 if uv_bin:
-                    result = subprocess.run(
-                        [uv_bin, "pip", "install", "--python", sys.executable, "-e", str(tinker_dir)],
-                        capture_output=True, text=True
+                    result = _safe_run(
+                        [uv_bin, "pip", "install", "--python", sys.executable, "-e", str(tinker_dir)]
                     )
                 else:
-                    result = subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "-e", str(tinker_dir)],
-                        capture_output=True, text=True
-                    )
-                if result.returncode == 0:
+                    result = _safe_run([sys.executable, "-m", "pip", "install", "-e", str(tinker_dir)])
+                if result and result.returncode == 0:
                     _print_success("    tinker-atropos installed")
                 else:
                     _print_warning("    tinker-atropos install failed - run manually:")

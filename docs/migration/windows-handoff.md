@@ -3,6 +3,94 @@
 Last updated: 2026-04-18
 Branch: windows/phase1-repo-bootstrap
 
+## Update 2026-04-18 (Critical CLI Input Rendering Fix)
+
+### Completed Work
+
+- Root-caused Windows typing instability in the classic CLI to output/render contention during active prompt sessions.
+- Fixed prompt-safe output path in `cli.py`:
+	- Added `_CPRINT_LOCK` to serialize concurrent output writes from worker/background threads.
+	- Added `_ANSI_ESCAPE_RE` to strip ANSI escapes when writing through prompt-toolkit's `StdoutProxy`.
+	- Updated `_cprint(...)` to detect active `patch_stdout` sessions and write via `sys.stdout` (`StdoutProxy`) instead of direct `print_formatted_text(...)`.
+	- Added fallback path so output remains visible even if ANSI formatter errors.
+- Added regression tests in `tests/cli/test_cprint_prompt_safety.py`:
+	- Verifies `_cprint` uses stdout proxy path and preserves visible text.
+	- Verifies fallback keeps text visible when formatter fails.
+- Ran focused CLI regression suites and confirmed all pass.
+
+### Current Status
+
+- Input line rendering is now protected from background-output overwrite in prompt-toolkit sessions.
+- The fix specifically targets the Windows interactive terminals where typed characters were intermittently invisible/disrupted.
+
+### Exact Verification Commands
+
+Run from repository root:
+
+```powershell
+pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\cli\test_cprint_prompt_safety.py tests\cli\test_tool_progress_scrollback.py
+pwsh -NoProfile -File .\scripts\run_tests.ps1 tests\cli\test_reasoning_command.py
+pwsh -NoProfile -Command "& \"d:/DevTools/hermes-agent/.venv/Scripts/python.exe\" -c \"from cli import _cprint; from prompt_toolkit.patch_stdout import patch_stdout; import threading,time; print('start');\nwith patch_stdout():\n    def worker():\n        for i in range(5):\n            _cprint('\\x1b[31mline %d\\x1b[0m' % i); time.sleep(0.01)\n    t=threading.Thread(target=worker); t.start(); t.join();\nprint('done')\""
+```
+
+Observed results in this session:
+- `tests/cli/test_cprint_prompt_safety.py tests/cli/test_tool_progress_scrollback.py`: `14 passed`
+- `tests/cli/test_reasoning_command.py`: included in prior focused run; overall batch passed (`67 passed` with paired CLI suite)
+- Patch stdout smoke run printed stable visible lines (`line 0` ... `line 4`) with no crash.
+
+### Known Issues
+
+- Full human interactive validation (rapid typing + backspace/arrow behavior while live agent output streams) is inherently manual; automated tests cover the output-path regression but not full keystroke ergonomics in every terminal emulator.
+
+### Next Actions
+
+1. Manual terminal validation pass in PowerShell, Windows Terminal, and CMD using a long-running prompt to confirm no flicker/disappearing text under real typing load.
+2. If any residual flicker appears, route high-frequency streaming-only output to an in-layout widget (no scrollback writes during active typing).
+
+## Update 2026-04-18 (Tools Setup WinError 2)
+
+### Completed Work
+
+- Root-caused setup wizard crash in `hermes setup` during tool provider post-setup (`subprocess.run(["npm", ...])` raised `FileNotFoundError: [WinError 2]`).
+- Hardened post-setup process launches in `hermes_cli/tools_config.py`:
+	- Added local `_safe_run(...)` wrapper that catches `OSError`/launch failures and returns a warning instead of crashing setup.
+	- Resolved npm path once with `shutil.which("npm")` and executed the resolved path directly.
+	- Applied same safe-run path to RL post-setup installs for consistency.
+	- Corrected browser post-setup manual recovery message to point at `PROJECT_ROOT`.
+- Verified no static errors in edited file.
+- Reproduced the previous failure mode by forcing a bad npm path and confirmed setup now warns and continues.
+
+### Current Status
+
+- `hermes setup` post-setup hooks no longer crash on missing/unlaunchable npm binaries.
+- Behavior is now graceful-degradation: warning + manual recovery instruction.
+
+### Exact Verification Commands
+
+Run from repository root:
+
+```powershell
+pwsh -NoProfile -Command "& \"d:/DevTools/hermes-agent/.venv/Scripts/python.exe\" -c \"import shutil; from hermes_cli.tools_config import _run_post_setup; orig=shutil.which; shutil.which=lambda n: r'C:\\\\definitely-missing\\\\npm.cmd' if n=='npm' else orig(n); _run_post_setup('agent_browser'); print('post-setup completed')\""
+pwsh -NoProfile -Command "Get-Command hermes | Select-Object -ExpandProperty Source"
+pwsh -NoProfile -Command "Push-Location D:\\; hermes --help | Select-Object -First 5; Pop-Location"
+cmd /d /c "cd /d D:\\ && hermes --help"
+```
+
+Expected key lines:
+- `Failed to launch '...npm.cmd install --silent': [WinError 2] ...`
+- `npm install failed - run manually: cd D:\DevTools\hermes-agent && npm install`
+- `post-setup completed`
+- Hermes help output renders successfully from outside repo.
+
+### Known Issues
+
+- If npm is genuinely missing or broken, browser tool dependencies are not auto-installed; user must run manual install after fixing Node.js/npm.
+
+### Next Actions
+
+1. Optionally add a small unit test around `_run_post_setup` launch-failure handling (mock `subprocess.run` raising `OSError`).
+2. Consider centralizing safe subprocess launch utility for other setup paths to keep behavior consistent.
+
 ## Completed Work
 
 - Verified remote model is correct (`origin` fork, `upstream` source).
