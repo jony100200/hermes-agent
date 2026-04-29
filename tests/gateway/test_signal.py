@@ -91,6 +91,29 @@ class TestSignalAdapterInit:
         assert adapter._account_normalized == "+15551234567"
 
 
+class TestSignalConnectCleanup:
+    """Regression coverage for failed connect() cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_releases_lock_and_closes_client_on_healthcheck_failure(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=MagicMock(status_code=503))
+        mock_client.aclose = AsyncMock()
+
+        with patch("gateway.platforms.signal.httpx.AsyncClient", return_value=mock_client), \
+             patch("gateway.status.acquire_scoped_lock", return_value=(True, None)), \
+             patch("gateway.status.release_scoped_lock") as mock_release:
+            result = await adapter.connect()
+
+        assert result is False
+        mock_client.aclose.assert_awaited_once()
+        mock_release.assert_called_once_with("signal-phone", "+15551234567")
+        assert adapter.client is None
+        assert adapter._platform_lock_identity is None
+
+
 class TestSignalHelpers:
     def test_redact_phone_long(self):
         from gateway.platforms.helpers import redact_phone
@@ -283,7 +306,13 @@ class TestSignalSessionSource:
 class TestSignalPhoneRedaction:
     @pytest.fixture(autouse=True)
     def _ensure_redaction_enabled(self, monkeypatch):
+        # agent.redact snapshots _REDACT_ENABLED at import time from the
+        # HERMES_REDACT_SECRETS env var. monkeypatch.delenv is too late —
+        # the module was already imported during test collection with
+        # whatever value was in the env then. Force the flag directly.
+        # See skill: xdist-cross-test-pollution Pattern 5.
         monkeypatch.delenv("HERMES_REDACT_SECRETS", raising=False)
+        monkeypatch.setattr("agent.redact._REDACT_ENABLED", True)
 
     def test_us_number(self):
         from agent.redact import redact_sensitive_text
@@ -436,6 +465,97 @@ class TestSignalSendImageFile:
 
         assert result.success is False
         assert "failed" in result.error.lower()
+
+
+class TestSignalRecipientResolution:
+    @pytest.mark.asyncio
+    async def test_send_prefers_cached_uuid_for_direct_messages(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        adapter._stop_typing_indicator = AsyncMock()
+        adapter._remember_recipient_identifiers("+15551230000", "68680952-6d86-45bc-85e0-1a4d186d53ee")
+
+        captured = []
+
+        async def mock_rpc(method, params, rpc_id=None, **kwargs):
+            captured.append({"method": method, "params": dict(params)})
+            return {"timestamp": 1234567890}
+
+        adapter._rpc = mock_rpc
+
+        result = await adapter.send(chat_id="+15551230000", content="hello")
+
+        assert result.success is True
+        assert captured[0]["method"] == "send"
+        assert captured[0]["params"]["recipient"] == ["68680952-6d86-45bc-85e0-1a4d186d53ee"]
+
+    @pytest.mark.asyncio
+    async def test_send_looks_up_uuid_via_list_contacts(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        adapter._stop_typing_indicator = AsyncMock()
+
+        captured = []
+
+        async def mock_rpc(method, params, rpc_id=None, **kwargs):
+            captured.append({"method": method, "params": dict(params)})
+            if method == "listContacts":
+                return [{
+                    "recipient": "351935789098",
+                    "number": "+15551230000",
+                    "uuid": "68680952-6d86-45bc-85e0-1a4d186d53ee",
+                    "isRegistered": True,
+                }]
+            if method == "send":
+                return {"timestamp": 1234567890}
+            return None
+
+        adapter._rpc = mock_rpc
+
+        result = await adapter.send(chat_id="+15551230000", content="hello")
+
+        assert result.success is True
+        assert captured[0]["method"] == "listContacts"
+        assert captured[1]["method"] == "send"
+        assert captured[1]["params"]["recipient"] == ["68680952-6d86-45bc-85e0-1a4d186d53ee"]
+
+    @pytest.mark.asyncio
+    async def test_send_falls_back_to_phone_when_no_uuid_found(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        adapter._stop_typing_indicator = AsyncMock()
+
+        captured = []
+
+        async def mock_rpc(method, params, rpc_id=None, **kwargs):
+            captured.append({"method": method, "params": dict(params)})
+            if method == "listContacts":
+                return []
+            if method == "send":
+                return {"timestamp": 1234567890}
+            return None
+
+        adapter._rpc = mock_rpc
+
+        result = await adapter.send(chat_id="+15551230000", content="hello")
+
+        assert result.success is True
+        assert captured[1]["params"]["recipient"] == ["+15551230000"]
+
+    @pytest.mark.asyncio
+    async def test_send_typing_uses_cached_uuid(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        adapter._remember_recipient_identifiers("+15551230000", "68680952-6d86-45bc-85e0-1a4d186d53ee")
+
+        captured = []
+
+        async def mock_rpc(method, params, rpc_id=None, **kwargs):
+            captured.append({"method": method, "params": dict(params), "rpc_id": rpc_id})
+            return {}
+
+        adapter._rpc = mock_rpc
+
+        await adapter.send_typing("+15551230000")
+
+        assert captured[0]["method"] == "sendTyping"
+        assert captured[0]["params"]["recipient"] == ["68680952-6d86-45bc-85e0-1a4d186d53ee"]
 
 
 # ---------------------------------------------------------------------------
@@ -680,15 +800,23 @@ class TestSignalSendDocumentViaHelper:
 
 
 # ---------------------------------------------------------------------------
-# send() returns message_id from timestamp (#4647)
+# Signal streaming edit capability / message_id behavior
 # ---------------------------------------------------------------------------
 
+class TestSignalStreamingCapabilities:
+    """Signal must opt out of edit-based streaming behavior."""
+
+    def test_signal_declares_no_message_editing(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+
+        assert adapter.SUPPORTS_MESSAGE_EDITING is False
+
+
 class TestSignalSendReturnsMessageId:
-    """Signal send() must return a timestamp-based message_id so the stream
-    consumer can follow its edit→fallback path correctly."""
+    """Signal send() should not pretend sent messages are editable."""
 
     @pytest.mark.asyncio
-    async def test_send_returns_timestamp_as_message_id(self, monkeypatch):
+    async def test_send_returns_none_message_id_even_with_timestamp(self, monkeypatch):
         adapter = _make_signal_adapter(monkeypatch)
         mock_rpc, _ = _stub_rpc({"timestamp": 1712345678000})
         adapter._rpc = mock_rpc
@@ -697,7 +825,7 @@ class TestSignalSendReturnsMessageId:
         result = await adapter.send(chat_id="+155****4567", content="hello")
 
         assert result.success is True
-        assert result.message_id == "1712345678000"
+        assert result.message_id is None
 
     @pytest.mark.asyncio
     async def test_send_returns_none_message_id_when_no_timestamp(self, monkeypatch):
@@ -877,3 +1005,100 @@ class TestSignalTypingBackoff:
 
         assert "+155****4567" not in adapter._typing_failures
         assert "+155****4567" not in adapter._typing_skip_until
+
+
+# ---------------------------------------------------------------------------
+# Reply quote extraction
+# ---------------------------------------------------------------------------
+
+class TestSignalQuoteExtraction:
+    """Verify Signal reply quote fields are propagated to MessageEvent."""
+
+    @pytest.mark.asyncio
+    async def test_handle_envelope_sets_reply_context_from_quote(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        captured = {}
+
+        async def fake_handle(event):
+            captured["event"] = event
+
+        adapter.handle_message = fake_handle
+
+        await adapter._handle_envelope({
+            "envelope": {
+                "sourceNumber": "+15550001111",
+                "sourceUuid": "uuid-sender",
+                "sourceName": "Tester",
+                "timestamp": 1000000000,
+                "dataMessage": {
+                    "message": "yes I agree",
+                    "quote": {
+                        "id": 99,
+                        "text": "want to grab lunch?",
+                        "author": "+15550002222",
+                    },
+                },
+            }
+        })
+
+        event = captured["event"]
+        assert event.text == "yes I agree"
+        assert event.reply_to_message_id == "99"
+        assert event.reply_to_text == "want to grab lunch?"
+
+    @pytest.mark.asyncio
+    async def test_handle_envelope_without_quote_leaves_reply_fields_none(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        captured = {}
+
+        async def fake_handle(event):
+            captured["event"] = event
+
+        adapter.handle_message = fake_handle
+
+        await adapter._handle_envelope({
+            "envelope": {
+                "sourceNumber": "+15550001111",
+                "sourceUuid": "uuid-sender",
+                "sourceName": "Tester",
+                "timestamp": 1000000000,
+                "dataMessage": {
+                    "message": "plain message",
+                },
+            }
+        })
+
+        event = captured["event"]
+        assert event.text == "plain message"
+        assert event.reply_to_message_id is None
+        assert event.reply_to_text is None
+
+    @pytest.mark.asyncio
+    async def test_handle_envelope_quote_without_text_sets_only_reply_id(self, monkeypatch):
+        adapter = _make_signal_adapter(monkeypatch)
+        captured = {}
+
+        async def fake_handle(event):
+            captured["event"] = event
+
+        adapter.handle_message = fake_handle
+
+        await adapter._handle_envelope({
+            "envelope": {
+                "sourceNumber": "+15550001111",
+                "sourceUuid": "uuid-sender",
+                "sourceName": "Tester",
+                "timestamp": 1000000000,
+                "dataMessage": {
+                    "message": "reply without quote text",
+                    "quote": {
+                        "id": 123,
+                        "author": "+15550002222",
+                    },
+                },
+            }
+        })
+
+        event = captured["event"]
+        assert event.reply_to_message_id == "123"
+        assert event.reply_to_text is None
