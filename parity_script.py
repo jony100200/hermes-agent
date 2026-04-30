@@ -1,0 +1,1 @@
+print('PARITY_SCRIPT_OK')
