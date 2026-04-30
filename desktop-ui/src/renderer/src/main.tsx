@@ -1,10 +1,14 @@
-import React from "react";
+import "./assets/main.css";
+
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import "./styles.css";
+import { I18nProvider } from "./components/I18nProvider";
 
-createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <I18nProvider>
+      <App />
+    </I18nProvider>
+  </StrictMode>,
 );
