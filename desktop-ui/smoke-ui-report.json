@@ -1,0 +1,36 @@
+{
+  "startedAt": "2026-04-30T02:15:23.719Z",
+  "prompt": "Create a simple Python hello world script and run it",
+  "status": "fail",
+  "events": [
+    {
+      "at": "2026-04-30T02:15:24.183Z",
+      "message": "Electron window opened"
+    },
+    {
+      "at": "2026-04-30T02:15:29.716Z",
+      "message": "Chat input ready"
+    },
+    {
+      "at": "2026-04-30T02:15:29.785Z",
+      "message": "Smoke prompt sent from UI"
+    },
+    {
+      "at": "2026-04-30T02:17:24.916Z",
+      "message": "Chat run completed"
+    }
+  ],
+  "createdFiles": [],
+  "agentMessages": [
+    "Error: Hermes exited with code null. Check your model configuration and API key."
+  ],
+  "checks": {
+    "chatReady": true,
+    "promptSent": true,
+    "runCompleted": true,
+    "outputMentionsHelloWorld": false,
+    "helloPyFileDetected": false
+  },
+  "error": "Smoke task did not satisfy all checks (run completion, hello output mention, hello python file detection).",
+  "finishedAt": "2026-04-30T02:17:24.929Z"
+}
