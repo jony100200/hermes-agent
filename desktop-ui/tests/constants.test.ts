@@ -210,3 +210,7 @@ describe("LOCAL_PRESETS", () => {
 
 describe("THEME_OPTIONS", () => {
   it("has system, light, dark", () => {
+    const values = THEME_OPTIONS.map((t) => t.value);
+    expect(values).toEqual(["system", "light", "dark"]);
+  });
+});
