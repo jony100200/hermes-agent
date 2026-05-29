@@ -501,14 +501,35 @@ class TestSearchFilesFallbackHiddenPaths:
         env.cwd = "/"
 
         def execute(command, **kwargs):
-            completed = subprocess.run(
-                command,
-                shell=True,
-                text=True,
-                capture_output=True,
-            )
+            import sys
+            if sys.platform == "win32":
+                try:
+                    from tools.environments.local import _find_bash
+                    bash = _find_bash()
+                    completed = subprocess.run(
+                        [bash, "-c", command],
+                        text=True,
+                        capture_output=True,
+                    )
+                except Exception:
+                    completed = subprocess.run(
+                        command,
+                        shell=True,
+                        text=True,
+                        capture_output=True,
+                    )
+            else:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    text=True,
+                    capture_output=True,
+                )
+            stdout = completed.stdout
+            if sys.platform == "win32" and stdout:
+                stdout = stdout.replace("/", "\\")
             return {
-                "output": completed.stdout,
+                "output": stdout,
                 "returncode": completed.returncode,
             }
 
