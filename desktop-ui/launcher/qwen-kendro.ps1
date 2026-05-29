@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
   [Alias("list", "list-models")]
   [switch]$ListModels,
@@ -60,6 +61,57 @@ function Ensure-ObjectProperty {
   return $Object.$Name
 }
 
+function Set-ObjectPropertyValue {
+  param(
+    [Parameter(Mandatory = $true)]$Object,
+    [Parameter(Mandatory = $true)][string]$Name,
+    $Value
+  )
+  if ($Object.PSObject.Properties[$Name]) {
+    $Object.$Name = $Value
+  }
+  else {
+    $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+  }
+}
+
+function New-ProviderEntry {
+  param(
+    [Parameter(Mandatory = $true)][string]$Id,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$BaseUrl,
+    [Parameter(Mandatory = $true)][string]$EnvKey,
+    $GenerationConfig = $null,
+    [string]$Description = ""
+  )
+
+  $entry = [ordered]@{
+    id = $Id
+    name = $Name
+    baseUrl = $BaseUrl
+    envKey = $EnvKey
+  }
+
+  if ($GenerationConfig) {
+    $entry.generationConfig = $GenerationConfig
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($Description)) {
+    $entry.description = $Description
+  }
+
+  return [pscustomobject]$entry
+}
+
+function Prepend-PathEntry {
+  param([string]$PathEntry)
+  if ([string]::IsNullOrWhiteSpace($PathEntry)) { return }
+  if (-not (Test-Path $PathEntry)) { return }
+  $parts = @($env:PATH -split ';')
+  if ($parts -contains $PathEntry) { return }
+  $env:PATH = "$PathEntry;$env:PATH"
+}
+
 $resolvedLines = & powershell -NoProfile -ExecutionPolicy Bypass -File $resolver 2>$null
 $runtime = Parse-KeyValueLines -Lines $resolvedLines
 
@@ -93,6 +145,7 @@ foreach ($item in $modelItems) {
     $dynamicIds += $id
   }
 }
+$dynamicIds = @($dynamicIds | Sort-Object)
 
 if (-not (Test-Path $SettingsPath)) {
   $settingsDir = Split-Path -Parent $SettingsPath
@@ -131,9 +184,9 @@ else {
 
 if (-not $envNode.PSObject.Properties["LMSTUDIO_API_KEY"]) { $envNode | Add-Member -NotePropertyName "LMSTUDIO_API_KEY" -NotePropertyValue "lm-studio" }
 if (-not $envNode.PSObject.Properties["OPENAI_API_KEY"]) { $envNode | Add-Member -NotePropertyName "OPENAI_API_KEY" -NotePropertyValue "ks-kendro" }
-$envNode.OPENAI_BASE_URL = $apiBase
-$envNode.KS_KENDRO_BASE_URL = $kendroBase
-$envNode.KS_AI_GATEWAY_BASE_URL = $apiBase
+Set-ObjectPropertyValue -Object $envNode -Name "OPENAI_BASE_URL" -Value $apiBase
+Set-ObjectPropertyValue -Object $envNode -Name "KS_KENDRO_BASE_URL" -Value $kendroBase
+Set-ObjectPropertyValue -Object $envNode -Name "KS_AI_GATEWAY_BASE_URL" -Value $apiBase
 if ($kendroBundleRoot) {
   if (-not $envNode.PSObject.Properties["KS_KENDRO_BUNDLE_ROOT"]) {
     $envNode | Add-Member -NotePropertyName "KS_KENDRO_BUNDLE_ROOT" -NotePropertyValue $kendroBundleRoot
@@ -144,49 +197,29 @@ if ($kendroBundleRoot) {
 }
 
 $providerEntries = @()
-$providerEntries += [pscustomobject]@{
-  baseUrl = $apiBase
-  generationConfig = [pscustomobject]@{
+$providerEntries += New-ProviderEntry -Id "ks-kendro-auto" -Name "KS Kendro Auto" -BaseUrl $apiBase -EnvKey "LMSTUDIO_API_KEY" -GenerationConfig ([pscustomobject]@{
     extra_body = [pscustomobject]@{ task_type = "general" }
     samplingParams = [pscustomobject]@{ max_tokens = 8192; temperature = 0.7 }
     contextWindowSize = 128000
     maxRetries = 3
     timeout = 300000
-  }
-  name = "KS Kendro Auto"
-  id = "ks-kendro-auto"
-  envKey = "LMSTUDIO_API_KEY"
-  description = "Dynamic auto routing"
-}
-$providerEntries += [pscustomobject]@{
-  baseUrl = $apiBase
-  generationConfig = [pscustomobject]@{
+  }) -Description "Dynamic auto routing"
+$providerEntries += New-ProviderEntry -Id "ks-kendro-coding" -Name "KS Kendro Coding" -BaseUrl $apiBase -EnvKey "LMSTUDIO_API_KEY" -GenerationConfig ([pscustomobject]@{
     extra_body = [pscustomobject]@{ task_type = "coding" }
     samplingParams = [pscustomobject]@{ max_tokens = 8192; temperature = 0.7 }
     contextWindowSize = 128000
     maxRetries = 3
     timeout = 300000
-  }
-  name = "KS Kendro Coding"
-  id = "ks-kendro-coding"
-  envKey = "LMSTUDIO_API_KEY"
-  description = "Dynamic coding routing"
-}
+  }) -Description "Dynamic coding routing"
 
 foreach ($id in $dynamicIds) {
-  $providerEntries += [pscustomobject]@{
-    baseUrl = $apiBase
-    generationConfig = [pscustomobject]@{
-      extra_body = [pscustomobject]@{ task_type = "general" }
-    }
-    name = "KS Kendro: $id"
-    id = $id
-    envKey = "LMSTUDIO_API_KEY"
-    description = "Synced from running Kendro model catalog"
+  if ($id -in @("ks-kendro-auto", "ks-kendro-coding")) {
+    continue
   }
+  $providerEntries += New-ProviderEntry -Id $id -Name $id -BaseUrl $apiBase -EnvKey "LMSTUDIO_API_KEY"
 }
 
-$providersNode.openai = $providerEntries
+Set-ObjectPropertyValue -Object $providersNode -Name "openai" -Value $providerEntries
 
 $allIds = @("ks-kendro-auto", "ks-kendro-coding") + $dynamicIds
 $currentModel = [string]$modelNode.name
@@ -227,6 +260,24 @@ if ($NoLaunch) {
   exit 0
 }
 
+$toolsHome = ""
+if (-not [string]::IsNullOrWhiteSpace($env:QWEN_TOOLS_HOME)) {
+  $toolsHome = $env:QWEN_TOOLS_HOME
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:DEVTOOLS_HOME)) {
+  $toolsHome = $env:DEVTOOLS_HOME
+}
+elseif (Test-Path "D:\DevTools") {
+  $toolsHome = "D:\DevTools"
+}
+
+if ($toolsHome) {
+  Prepend-PathEntry -PathEntry (Join-Path $toolsHome "npm-global")
+  Prepend-PathEntry -PathEntry (Join-Path $toolsHome "nodejs")
+  Prepend-PathEntry -PathEntry (Join-Path $toolsHome "bin")
+  Prepend-PathEntry -PathEntry $toolsHome
+}
+
 $qwenCmd = Get-Command qwen.cmd -ErrorAction SilentlyContinue
 if (-not $qwenCmd) {
   $qwenCmd = Get-Command qwen -ErrorAction SilentlyContinue
@@ -242,7 +293,17 @@ $env:KS_KENDRO_BASE_URL = $kendroBase
 $env:KS_AI_GATEWAY_BASE_URL = $apiBase
 if ($kendroBundleRoot) { $env:KS_KENDRO_BUNDLE_ROOT = $kendroBundleRoot }
 
-$launchArgs = @("--model", $selectedModel) + $QwenArgs
+$openAiKey = [string]$envNode.OPENAI_API_KEY
+if ([string]::IsNullOrWhiteSpace($openAiKey)) {
+  $openAiKey = "ks-kendro"
+}
+
+$launchArgs = @(
+  "--auth-type", "openai",
+  "--openai-base-url", $apiBase,
+  "--openai-api-key", $openAiKey,
+  "--model", $selectedModel
+) + $QwenArgs
 $launchTarget = $qwenCmd.Source
 & $launchTarget @launchArgs
 exit $LASTEXITCODE
