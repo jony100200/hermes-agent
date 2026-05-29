@@ -4,15 +4,19 @@ setlocal EnableExtensions EnableDelayedExpansion
 :: ============================================================================
 :: launch_orchestrator.bat
 :: One-click launcher for the Tiered Agent Orchestration pipeline.
-:: Opens Hermes CLI pre-loaded with the tiered-orchestration skill and all
-:: delegation toolsets active.
 ::
-:: What gets wired up:
-::   T1 — LM Studio local (http://127.0.0.1:1234/v1)
-::   T2 — Groq / Together / Gemini Free / HuggingFace
-::   T3 — Hermes memory (MEMORY.md) + Kendro context if running
-::   T4 — Paid review (OpenRouter → Claude/GPT)
-::   T5 — Cheap verify (Haiku / Gemini Flash)
+:: KEY DESIGN: No API keys are stored here or in the repo.
+::   - Primary: Kendro service at O:\KS Apps\KS Kendro handles all keys
+::     and routes to free models via its local OpenAI-compatible API.
+::   - Fallback: If Kendro is running, we read its .env at launch time
+::     (never stored in Hermes files). If neither available, graceful notice.
+::
+:: Tier routing:
+::   T1  LM Studio local      (127.0.0.1:1234)
+::   T2  Kendro free router   (127.0.0.1:8788/v1) — owns all cloud keys
+::   T3  Hermes memory        MEMORY.md  +  Kendro context store
+::   T4  Paid review          via Kendro paid route or OpenRouter key
+::   T5  Cheap verify         via Kendro cheap route or OpenRouter key
 :: ============================================================================
 
 set "REPO_DIR=%~dp0"
@@ -22,72 +26,101 @@ set "PYTHON_EXE=%REPO_DIR%\.venv\Scripts\python.exe"
 set "HERMES_HOME=%REPO_DIR%\data\home"
 set "TMP=%REPO_DIR%\data\tmp"
 set "TEMP=%REPO_DIR%\data\tmp"
+set "KENDRO_DIR=O:\KS Apps\KS Kendro"
+set "KENDRO_ENV=%KENDRO_DIR%\.env"
+set "KENDRO_STATE=%KENDRO_DIR%\.runtime\kendro_bundle_state.json"
 
-:: Create tmp dir if needed
 if not exist "%REPO_DIR%\data\tmp" mkdir "%REPO_DIR%\data\tmp"
 
-:: ── API Keys (merged from Kendro .env) ───────────────────────────────────
-set "GROQ_API_KEY=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"
-set "TOGETHER_API_KEY=tgp_v1_U7Jt3bB84SzZr_osyZfIPPQ_N2tIXGA4iYL8ZO-eRdw"
-set "GEMINI_API_KEY=AIzaSyDPj6oGaFy5N6fPtnPIwaEL00_CERMVJj8"
-set "HF_TOKEN=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"
-set "GOOGLE_API_KEY=AIzaSyDPj6oGaFy5N6fPtnPIwaEL00_CERMVJj8"
+:: ── Step 1: Detect Kendro ─────────────────────────────────────────────────
+set "KENDRO_LIVE=0"
+set "KENDRO_BASE_URL="
 
-:: ── Kendro Integration (auto-discover if running) ────────────────────────
-set "KENDRO_DIR=O:\KS Apps\KS Kendro"
-if exist "%KENDRO_DIR%\.runtime\kendro_bundle_state.json" (
-  echo [Orchestrator] Kendro service detected at %KENDRO_DIR%
-  set "KS_KENDRO_BUNDLE_ROOT=%KENDRO_DIR%"
-  :: Try to extract base_url from state file
-  for /f "tokens=2 delims=:, " %%A in ('findstr "base_url" "%KENDRO_DIR%\.runtime\kendro_bundle_state.json" 2^>nul') do (
-    set "KS_KENDRO_BASE_URL=%%~A"
+if exist "%KENDRO_STATE%" (
+  :: Parse base_url out of JSON (simple findstr approach)
+  for /f "tokens=2 delims=:," %%A in ('findstr /i "base_url" "%KENDRO_STATE%" 2^>nul') do (
+    set "RAW=%%~A"
+    :: Strip quotes and spaces
+    set "RAW=!RAW: =!"
+    set "RAW=!RAW:"=!"
+    if not "!RAW!"=="" (
+      if not "!RAW!"=="null" (
+        set "KENDRO_BASE_URL=http:!RAW!"
+      )
+    )
   )
-) else (
-  echo [Orchestrator] Kendro not running - T3 memory will use Hermes only
 )
 
-:: ── LM Studio check ──────────────────────────────────────────────────────
+:: Verify Kendro is actually alive
+if defined KENDRO_BASE_URL (
+  curl -s --max-time 3 "%KENDRO_BASE_URL%/live" >nul 2>&1
+  if not errorlevel 1 set "KENDRO_LIVE=1"
+)
+
+:: ── Step 2: Load keys from Kendro .env at runtime (never stored in repo) ──
+:: Keys are sourced from Kendro's own .env file - zero duplication.
+:: This section only runs if Kendro is present; never hardcodes values.
+if exist "%KENDRO_ENV%" (
+  for /f "usebackq tokens=1,* delims==" %%K in ("%KENDRO_ENV%") do (
+    set "LINE=%%K"
+    if not "!LINE:~0,1!"=="#" (
+      if not "%%L"=="" (
+        set "%%K=%%L"
+      )
+    )
+  )
+  echo [Orchestrator] Keys loaded from Kendro .env ^(not stored in repo^)
+) else (
+  echo [Orchestrator] Kendro .env not found at %KENDRO_ENV%
+  echo [Orchestrator] Only OpenRouter key ^(already in Hermes .env^) will be used
+)
+
+:: ── Step 3: Export Kendro vars for the UI ────────────────────────────────
+if "%KENDRO_LIVE%"=="1" (
+  set "KS_KENDRO_BUNDLE_ROOT=%KENDRO_DIR%"
+  set "KS_KENDRO_BASE_URL=%KENDRO_BASE_URL%"
+  echo [Orchestrator] Kendro router LIVE at %KENDRO_BASE_URL%
+) else (
+  echo [Orchestrator] Kendro not running - using direct provider keys from Kendro .env
+  if defined GROQ_API_KEY (
+    echo [Orchestrator] Groq free tier available via GROQ_API_KEY
+  )
+)
+
+:: ── Step 4: LM Studio check ──────────────────────────────────────────────
 curl -s --max-time 2 http://127.0.0.1:1234/v1/models >nul 2>&1
 if errorlevel 1 (
-  echo [Orchestrator] WARNING: LM Studio not detected at http://127.0.0.1:1234
-  echo [Orchestrator] T1 workers will fail - start LM Studio or change delegation.base_url
-  echo [Orchestrator] Fallback chain: Groq free -^> Gemini free -^> OpenRouter
-  echo.
+  echo [Orchestrator] WARNING: LM Studio not at 127.0.0.1:1234
+  echo [Orchestrator] T1 workers fall back to Kendro/Groq free
 ) else (
-  echo [Orchestrator] LM Studio T1 ready at http://127.0.0.1:1234/v1
+  echo [Orchestrator] LM Studio T1 ready
 )
 
 if not exist "%PYTHON_EXE%" (
   echo ERROR: Python venv not found at %PYTHON_EXE%
-  echo Run: python -m venv .venv ^&^& .venv\Scripts\pip install -e .
   pause
   exit /b 1
 )
 
 echo.
 echo =====================================================================
-echo  HERMES TIERED ORCHESTRATION PIPELINE
+echo  HERMES TIERED ORCHESTRATION
 echo =====================================================================
-echo  T1  LM Studio local   http://127.0.0.1:1234/v1
-echo  T2  Groq free         llama-3.3-70b / qwq-32b
-echo  T2  Together free     Llama-3.3-70B / DeepSeek-R1
-echo  T2  Gemini free       gemini-2.0-flash (1M ctx)
-echo  T3  Memory            HERMES_HOME\MEMORY.md + Kendro if running
-echo  T4  Paid review       OpenRouter -^> claude-sonnet / gpt-4o
-echo  T5  Cheap verify      claude-haiku / gemini-flash
+echo  T1  LM Studio local    127.0.0.1:1234
+if "%KENDRO_LIVE%"=="1" (
+  echo  T2  Kendro router       %KENDRO_BASE_URL% [LIVE]
+) else (
+  echo  T2  Direct free APIs    Groq / Gemini via Kendro .env keys
+)
+echo  T3  Memory             MEMORY.md + Kendro context store
+echo  T4  Paid review        OpenRouter ^(your key^)
+echo  T5  Cheap verify       OpenRouter ^(your key^)
+echo  Keys source            Kendro .env ^(not in git^)
 echo =====================================================================
-echo  Skill loaded: /skill tiered-orchestration
-echo  Max parallel: 4 concurrent sub-agents
-echo  Spawn depth:  2 (parent -^> orchestrator -^> workers)
+echo  Skill: /skill tiered-orchestration    Workers: 4    Depth: 2
 echo =====================================================================
-echo.
-echo TIP: Ask any complex task naturally. Say "run in parallel" or
-echo      "use tiered orchestration" to activate the full pipeline.
-echo.
-echo Press Ctrl+C to stop.
 echo.
 
-:: Launch Hermes CLI with delegation + all toolsets active
 "%PYTHON_EXE%" "%REPO_DIR%\hermes" chat ^
   --toolsets hermes-cli ^
   --load-skill tiered-orchestration ^
@@ -95,6 +128,6 @@ echo.
 
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.
-echo [Orchestrator] Session ended with code %EXIT_CODE%.
+echo [Orchestrator] Session ended ^(code %EXIT_CODE%^).
 pause
 exit /b %EXIT_CODE%
