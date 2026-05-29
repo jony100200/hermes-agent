@@ -32,8 +32,40 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo Stashing any uncommitted changes...
-git stash -m "Auto-stash before sync_windows_native" >nul 2>&1
+git stash push -m "Auto-stash before sync_windows_native" -- :!sync_windows_native.bat :!sync_upstream.bat >nul 2>&1
 set "STASHED=%ERRORLEVEL%"
+
+echo.
+echo Checking out main branch...
+git checkout main
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Error: Could not checkout main branch.
+    goto restore
+)
+
+echo.
+echo Updating local main branch from upstream/main (fast-forward)...
+git merge upstream/main --ff-only
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Error: Fast-forward merge failed on main. Local main may have diverged.
+    echo Attempting regular merge...
+    git merge upstream/main -m "Merge upstream/main into main"
+    if %ERRORLEVEL% neq 0 (
+         echo.
+         echo Error: Merge failed on main with conflicts. Please resolve manually.
+         goto restore
+    )
+)
+
+echo.
+echo Pushing updated main to origin (jony100200/hermes-agent)...
+git push origin main
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Warning: Failed to push main to origin.
+)
 
 echo.
 echo Checking out windows-native branch...
@@ -45,9 +77,9 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo Merging upstream/main into windows-native branch...
+echo Merging main into windows-native branch...
 echo (Keeping your custom improvements intact)
-git merge upstream/main -m "Merge upstream/main into windows-native"
+git merge main -m "Merge main into windows-native"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo ========================================================
@@ -66,8 +98,9 @@ echo Pushing updated windows-native to origin (jony100200/hermes-agent)...
 git push origin windows-native
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo Warning: Failed to push to origin. You might not have write permissions or internet access.
+    echo Warning: Failed to push windows-native to origin.
 )
+
 
 :restore
 if "%START_BRANCH%" neq "" (

@@ -32,7 +32,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo Stashing any uncommitted changes...
-git stash -m "Auto-stash before sync_fork" >nul 2>&1
+git stash push -m "Auto-stash before sync_fork" -- :!sync_windows_native.bat :!sync_upstream.bat >nul 2>&1
 set "STASHED=%ERRORLEVEL%"
 
 echo.
