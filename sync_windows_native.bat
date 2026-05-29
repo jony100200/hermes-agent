@@ -31,41 +31,24 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo Stashing any uncommitted changes...
-git stash push -m "Auto-stash before sync_windows_native" -- :!sync_windows_native.bat :!sync_upstream.bat >nul 2>&1
-set "STASHED=%ERRORLEVEL%"
-
-echo.
-echo Checking out main branch...
-git checkout main
+echo Updating local main branch reference to upstream/main...
+git branch -f main upstream/main
 if %ERRORLEVEL% neq 0 (
-    echo.
-    echo Error: Could not checkout main branch.
-    goto restore
+    echo Error: Failed to update local main branch reference.
+    goto error
 )
 
 echo.
-echo Updating local main branch from upstream/main (fast-forward)...
-git merge upstream/main --ff-only
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo Error: Fast-forward merge failed on main. Local main may have diverged.
-    echo Attempting regular merge...
-    git merge upstream/main -m "Merge upstream/main into main"
-    if %ERRORLEVEL% neq 0 (
-         echo.
-         echo Error: Merge failed on main with conflicts. Please resolve manually.
-         goto restore
-    )
-)
-
-echo.
-echo Pushing updated main to origin (jony100200/hermes-agent)...
+echo Pushing updated main to origin (your fork)...
 git push origin main
 if %ERRORLEVEL% neq 0 (
-    echo.
     echo Warning: Failed to push main to origin.
 )
+
+echo.
+echo Stashing any uncommitted changes on !START_BRANCH!...
+git stash push -m "Auto-stash before sync_windows_native" -- :!sync_windows_native.bat :!sync_upstream.bat >nul 2>&1
+set "STASHED=%ERRORLEVEL%"
 
 echo.
 echo Checking out windows-native branch...
@@ -100,6 +83,7 @@ if %ERRORLEVEL% neq 0 (
     echo.
     echo Warning: Failed to push windows-native to origin.
 )
+
 
 
 :restore
