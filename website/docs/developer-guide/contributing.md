@@ -22,7 +22,8 @@ We value contributions in this order:
 
 ## Common contribution paths
 
-- Building a new tool? Start with [Adding Tools](./adding-tools.md)
+- Building a custom/local tool without modifying Hermes core? Start with [Build a Hermes Plugin](../guides/build-a-hermes-plugin.md)
+- Building a new built-in core tool for Hermes itself? Start with [Adding Tools](./adding-tools.md)
 - Building a new skill? Start with [Creating Skills](./creating-skills.md)
 - Building a new inference provider? Start with [Adding Providers](./adding-providers.md)
 
@@ -49,7 +50,6 @@ export VIRTUAL_ENV="$(pwd)/venv"
 
 # Install with all extras (messaging, cron, CLI menus, dev tools)
 uv pip install -e ".[all,dev]"
-uv pip install -e "./tinker-atropos"
 
 # Optional: browser tools
 npm install
@@ -94,7 +94,17 @@ pytest tests/ -v
 
 ## Cross-Platform Compatibility
 
-Hermes officially supports Linux, macOS, native Windows, and WSL2. Cross-platform safety is still required because shells, process APIs, and path semantics differ across these environments. Key rules:
+Hermes officially supports Linux, macOS, native Windows, and WSL2. Cross-platform safety is required because shells, process APIs, and path semantics differ across these environments.
+
+When contributing code, keep these rules in mind:
+
+- **Don't add unguarded `signal.SIGKILL` references.** It's not defined on Windows.  Either route through `gateway.status.terminate_pid(pid, force=True)` (the centralized primitive that does `taskkill /T /F` on Windows and SIGKILL on POSIX), or fall back with `getattr(signal, "SIGKILL", signal.SIGTERM)`.
+- **Catch `OSError` alongside `ProcessLookupError` on `os.kill(pid, 0)` probes.** Windows raises `OSError` (WinError 87, "parameter is incorrect") for an already-gone PID instead of `ProcessLookupError`.
+- **Don't force the terminal to POSIX semantics.** `os.setsid`, `os.killpg`, `os.getpgid`, `os.fork` all raise on Windows — gate them with `if sys.platform != "win32":` or `if os.name != "nt":`.
+- **Open files with an explicit `encoding="utf-8"`.** The Python default on Windows is the system locale (often cp1252), which mojibakes or crashes on non-Latin text.
+- **Use `pathlib.Path` / `os.path.join` — never manually concat with `/`.** This matters less for strings the OS gives us back and more for strings we construct to hand to subprocesses.
+
+Key patterns:
 
 ### 1. `termios` and `fcntl` are Unix-only
 

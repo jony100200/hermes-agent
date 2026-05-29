@@ -7,7 +7,6 @@ Covers the bugs discovered while setting up TBLite evaluation:
 4. ensurepip fix in Modal image builder
 5. No swe-rex dependency — uses native Modal SDK
 6. /home/ added to host prefix check
-7. Vercel sandbox cwd normalization
 """
 
 import os
