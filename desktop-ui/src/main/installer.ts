@@ -74,7 +74,10 @@ function pythonCandidatesForRepo(repoPath: string): string[] {
 }
 
 function resolveRuntimePaths(): RuntimePaths {
-  const defaultDesktopConfigPath = join(DEFAULT_HERMES_HOME, "desktop.json");
+  const envHermesHome = normalizePath(process.env.HERMES_HOME);
+  const hermesHome = envHermesHome || DEFAULT_HERMES_HOME;
+
+  const defaultDesktopConfigPath = join(hermesHome, "desktop.json");
   const diskConfig = readDesktopPathConfig(defaultDesktopConfigPath);
 
   const envRepoPath = normalizePath(process.env.HERMES_DESKTOP_REPO);
@@ -86,10 +89,10 @@ function resolveRuntimePaths(): RuntimePaths {
     envRepoPath,
     diskConfig.hermesRepoPath,
     detectRepoFromCwd(),
-    join(DEFAULT_HERMES_HOME, "hermes-agent"),
+    join(hermesHome, "hermes-agent"),
   ];
   const hermesRepo =
-    firstExistingPath(repoCandidates) || repoCandidates.find((v): v is string => Boolean(v)) || join(DEFAULT_HERMES_HOME, "hermes-agent");
+    firstExistingPath(repoCandidates) || repoCandidates.find((v): v is string => Boolean(v)) || join(hermesHome, "hermes-agent");
 
   const scriptCandidates = [
     envScriptPath,
@@ -112,7 +115,7 @@ function resolveRuntimePaths(): RuntimePaths {
     firstExistingPath(workspaceCandidates) || workspaceCandidates.find((v): v is string => Boolean(v)) || hermesRepo;
 
   return {
-    hermesHome: DEFAULT_HERMES_HOME,
+    hermesHome,
     hermesRepo,
     hermesVenv: dirname(dirname(hermesPython)),
     hermesPython,

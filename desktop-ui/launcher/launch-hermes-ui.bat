@@ -85,6 +85,12 @@ if not exist "node_modules" (
   )
 )
 
+set "HERMES_HOME=%REPO_DIR%\data\home"
+set "TMP=%REPO_DIR%\data\tmp"
+set "TEMP=%REPO_DIR%\data\tmp"
+set "XDG_CACHE_HOME=%REPO_DIR%\data\cache"
+set "PIP_CACHE_DIR=%REPO_DIR%\data\pip-cache"
+
 set "HERMES_DESKTOP_REPO=%REPO_DIR%"
 set "HERMES_DESKTOP_PYTHON=%PYTHON_EXE%"
 set "HERMES_DESKTOP_SCRIPT=%HERMES_SCRIPT%"
